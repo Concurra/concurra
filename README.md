@@ -18,7 +18,7 @@
 
 ---
 
-## 🥺 Why Not Just Use Native `threading` or `multiprocessing`?
+## Why Not Just Use Native `threading` or `multiprocessing`?
 
 Python offers `threading`, `multiprocessing`, and executors like `ThreadPoolExecutor`. These are great—but Concurra adds structure, safety, and simplicity:
 
@@ -41,7 +41,7 @@ Python offers `threading`, `multiprocessing`, and executors like `ThreadPoolExec
 
 To use Concurra effectively, follow these steps:
 
-- Create a Concurra object – Configure parallelism and behavior (e.g. max workers, timeout).
+- Create a TaskRunner object – Configure parallelism and behavior (e.g. max workers, timeout).
 
 - Add tasks using .add_task() – You can add any callable with args and a label.
 
@@ -49,11 +49,11 @@ To use Concurra effectively, follow these steps:
 
 ⚠️ Important Notes:
 
-- A Concurra object can be run only once.
+- A TaskRunner object can be run only once.
 
 - Once run() or execute_in_background() is called, you cannot add more tasks.
 
-- For a new batch of parallel tasks, create a new Concurra object and add required tasks.
+- For a new batch of parallel tasks, create a new TaskRunner object and add required tasks.
 
 ---
 
@@ -63,12 +63,12 @@ To use Concurra effectively, follow these steps:
 pip install concurra
 ```
 
-## ⚙️ Concurra Options and Configuration
+## ⚙️ TaskRunner Options and Configuration
 
-When initializing `Concurra`, you can customize behavior using the following parameters:
+When initializing `TaskRunner`, you can customize behavior using the following parameters:
 
 ```python
-runner = concurra.Concurra(
+runner = concurra.TaskRunner(
     max_concurrency=4,
     name="MyRunner",
     timeout=10,
@@ -113,7 +113,7 @@ runner.add_task(some_function, arg1, arg2, label="task_name", kwarg1=value1)
 
 ## 🏃‍♂️ `run()` Method Options
 
-When you call `.run()` on a `Concurra` object, you can customize its behavior using the following parameters:
+When you call `.run()` on a `TaskRunner` object, you can customize its behavior using the following parameters:
 
 ```python
 results = runner.run(
@@ -146,7 +146,7 @@ def say_hello():
 def say_universe():
     return "Hello Universe"
 
-runner = concurra.Concurra(max_concurrency=2)
+runner = concurra.TaskRunner(max_concurrency=2)
 runner.add_task(say_hello, label="greet_world")
 runner.add_task(say_universe, label="greet_universe")
 
@@ -187,7 +187,7 @@ def square(x):
 def divide(x, y):
     return x / y
 
-runner = concurra.Concurra(max_concurrency=4)  # Uses 4 workers
+runner = concurra.TaskRunner(max_concurrency=4)  # Uses 4 workers
 
 runner.add_task(square, 4, label="square_4")
 runner.add_task(square, 5, label="square_5")
@@ -277,7 +277,7 @@ def square(x):
 def divide(x, y):
     return x / y
 
-runner = concurra.Concurra(max_concurrency=4)
+runner = concurra.TaskRunner(max_concurrency=4)
 
 runner.add_task(square, 4, label="square_4")
 runner.add_task(square, 5, label="square_5")
@@ -375,7 +375,7 @@ ZeroDivisionError: division by zero
 ---
 
 ### ⛔ Fast Fail on First Error
-**Fast Fail (fast_fail=True):** When enabled, Concurra will immediately terminate all other tasks as soon as any task fails. This is useful when one failure invalidates the rest of the work or when you want to save resources
+**Fast Fail (fast_fail=True):** When enabled, TaskRunner will immediately terminate all other tasks as soon as any task fails. This is useful when one failure invalidates the rest of the work or when you want to save resources
 ```python
 import concurra
 import time
@@ -387,7 +387,7 @@ def will_succeed():
     time.sleep(2)
     return "Success"
 
-runner = concurra.Concurra(fast_fail=True, max_concurrency=2)
+runner = concurra.TaskRunner(fast_fail=True, max_concurrency=2)
 runner.add_task(will_succeed, label="ok")
 runner.add_task(will_fail, label="fail")
 runner.run()
@@ -458,7 +458,7 @@ def slow():
     time.sleep(15)
     return "Done"
 
-runner = concurra.Concurra(timeout=4)
+runner = concurra.TaskRunner(timeout=4)
 runner.add_task(slow, label="timeout_task")
 results = runner.run()
 print(results["timeout_task"]["status"])  # Terminated

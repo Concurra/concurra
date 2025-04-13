@@ -22,9 +22,9 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install .  # Install your package
         pip install tabulate
         pip install pytest
+        pip install .  # Install your package
 
     - name: Run tests
       run: pytest test_core.py
