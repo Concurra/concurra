@@ -1,0 +1,14 @@
+
+site_name: Concurra Docs
+theme:
+  name: material
+
+docs_dir: .
+
+nav:
+  - Home: index.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Concurra/concurra

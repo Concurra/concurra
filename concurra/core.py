@@ -216,7 +216,7 @@ class TaskHandler:
         return f"<TaskRunner: {self.name}>"
 
 
-class Concurra:
+class TaskRunner:
 
     STATE_RUNNING = 0
     STATE_CLOSING = 1
@@ -227,7 +227,7 @@ class Concurra:
     def __init__(self, max_concurrency=None, name=None, timeout=None, progress_stats=True, fast_fail=False, 
                  use_multiprocessing=False, logger=None, log_errors=False):
         """
-        Initialize the Concurra.
+        Initialize the TaskRunner.
 
         Args:
             max_concurrency (int): Maximum number of tasks allowed to run concurrently, either as threads or processes depending on configuration.
@@ -305,8 +305,8 @@ class Concurra:
         """
 
         if self._has_started:
-            raise RuntimeError("Concurra has already started execution. "
-                               "Create a new Concurra instance to add tasks and run again.")
+            raise RuntimeError("TaskRunner has already started execution. "
+                               "Create a new TaskRunner instance to add tasks and run again.")
         self._has_started = True
         self.time_started = datetime.now()
         self._start_new_tasks()
