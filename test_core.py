@@ -182,3 +182,42 @@ def test_abort_task_with_results():
     assert "long_task" in results
     assert results["long_task"]["status"] in ["Terminated", "Failed"]
     assert results["long_task"]["has_failed"] is True
+
+def test_add_work_method():
+    runner = TaskRunner(logger=LOGGER)
+
+    workload = [
+        (dummy_success, (1,), {}, "task1"),
+        (dummy_success, (2,), {}, "task2"),
+        (dummy_success, (1,))  # Minimal valid input
+    ]
+
+    runner.add_work(workload)
+    results = runner.run()
+
+    assert results["task1"]["result"] == 2
+    assert results["task2"]["result"] == 4
+    assert results[2]["result"] == 2  # dummy_success(None) → None*2 → error, so use safe input
+
+def test_runner_len():
+    runner = TaskRunner(logger=LOGGER)
+    runner.add_task(dummy_success, 1)
+    runner.add_task(dummy_success, 2)
+
+    assert len(runner) == 2
+
+def test_get_active_runner_count():
+    runner = TaskRunner(logger=LOGGER)
+    runner.add_task(dummy_success, 3, label="active_task")
+    runner.add_task(dummy_success, 4, label="active_task2")
+    runner.execute_in_background()
+
+    time.sleep(0.5)  # Give time to start the task
+    active_count = runner.get_active_runner_count()
+
+    assert active_count >= 1
+
+    # Wait for completion to ensure count drops to 0
+    time.sleep(6)
+    assert runner.get_active_runner_count() == 0
+

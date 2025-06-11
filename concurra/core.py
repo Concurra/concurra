@@ -267,6 +267,9 @@ class TaskRunner:
         self._executed_tasks = 0
         self._has_started = False
 
+    def __len__(self):
+        return self._total_tasks
+
     def add_task(self, task, *args, label=None, **kwargs):
         """
         Add a task to the task queue to be executed.
@@ -284,17 +287,63 @@ class TaskRunner:
         if not callable(task):
             raise TypeError(f"The provided task '{task}' is not callable.")
 
-        task_handler = TaskHandler(task, *args, **kwargs)
         task_id = len(self.tasks)
         label = label or task_id
 
         if label in (t.label for t in self.tasks):
             raise ValueError(f"Duplicate task label: '{label}' already exists.")
 
+        task_handler = TaskHandler(task, *args, **kwargs)
         task_executor = TaskExecutor(task_handler, task_id, label, self.results_registry,
                                      use_multiprocessing=self.use_multiprocessing)
         self.tasks.append(task_executor)
         self._total_tasks += 1
+
+    def add_work(self, workload):
+        """
+        Adds multiple tasks to the runner from a list of tuples.
+
+        Args:
+            workload (list of tuple): Each tuple can be:
+                - (func,)
+                - (func, args)
+                - (func, args, kwargs)
+                - (func, args, kwargs, label)
+        """
+
+        for i, work in enumerate(workload):
+            if not isinstance(work, tuple):
+                raise TypeError(f"Workload item at index {i} is not a tuple")
+
+            if len(work) < 1 or len(work) > 4:
+                raise ValueError(
+                    f"Invalid workload item at index {i}: expected a tuple with 1 to 4 elements in the format:\n"
+                    f"(function: callable, args: tuple, kwargs: dict, label: str)\n"
+                    f"But got {len(work)} element(s): {work}"
+                )
+
+            func = work[0]
+            args = work[1] if len(work) > 1 else ()
+            kwargs = work[2] if len(work) > 2 else {}
+            label = work[3] if len(work) > 3 else None
+
+            self.add_task(func, *args, label=label, **kwargs)
+
+    def add_function(self, func, args=None, kwargs=None, key=None, log_exception=True):
+        """
+        Adds a single function to the task runner.
+
+        Args:
+            func (callable): The function to be executed.
+            args (tuple, optional): Positional arguments for the function.
+            kwargs (dict, optional): Keyword arguments for the function.
+            key (str, optional): Unique label for the task. If None, task ID will be used.
+            log_exception (bool): Whether to log exceptions if task fails. (Unused, kept for backward compatibility of old library)
+        """
+
+        args = args or ()
+        kwargs = kwargs or {}
+        self.add_task(func, *args, label=key, **kwargs)
 
     def execute_in_background(self):
         """
@@ -507,3 +556,12 @@ class TaskRunner:
                 task.terminate()
             if not task.is_results_updated():
                 task.update_results_on_termination()
+
+    def get_active_runner_count(self):
+        """
+        Returns the number of currently running task executors.
+
+        Returns:
+            int: Count of active/running tasks.
+        """
+        return sum(1 for task in self.started_tasks if task.is_running())
