@@ -277,7 +277,7 @@ class TaskRunner:
         Args:
             task (callable): The function or task handler to execute.
             *args: Arguments to pass to the task.
-            label (str): Unique label for the task (default is the task ID).
+            label (str): Unique key label for the task (default is the task ID).
             **kwargs: Additional keyword arguments for the task.
         """
 
@@ -291,13 +291,17 @@ class TaskRunner:
         label = label or task_id
 
         if label in (t.label for t in self.tasks):
-            raise ValueError(f"Duplicate task label: '{label}' already exists.")
+            raise ValueError(f"Duplicate task key label: '{label}' already exists.")
 
         task_handler = TaskHandler(task, *args, **kwargs)
         task_executor = TaskExecutor(task_handler, task_id, label, self.results_registry,
                                      use_multiprocessing=self.use_multiprocessing)
         self.tasks.append(task_executor)
         self._total_tasks += 1
+
+    def add_func(self, func, *args, **kwargs):
+        key = kwargs.pop("key", None)
+        self.add_task(func, *args, label=key, **kwargs)
 
     def add_work(self, workload):
         """
@@ -402,6 +406,9 @@ class TaskRunner:
 
         self.execute_in_background()
         return self.get_background_results(verify, raise_exception, error_message)
+
+    def execute(self, verify=True, raise_exception=False, error_message=None):
+        return self.run(verify=verify, raise_exception=raise_exception, error_message=error_message)
 
     def show_progress(self):
         """
