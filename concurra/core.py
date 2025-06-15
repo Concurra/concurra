@@ -15,7 +15,8 @@ class TaskExecutor:
     class for executing tasks while recording runtime results and statistics.
     """
 
-    def __init__(self, task_handler, task_id, label, results_registry, use_multiprocessing=False):
+    def __init__(self, task_handler, task_id, label, results_registry, use_multiprocessing=False,
+                 depends_on=None):
         """
         Initialize the executor.
 
@@ -24,6 +25,7 @@ class TaskExecutor:
             task_id: Unique identifier for the task execution.
             label: Key used to store results in the results_registry.
             results_registry: Dictionary to store execution metadata and results.
+            depends_on: list of dependencies task labels
         """
 
         self.task_handler = task_handler
@@ -37,6 +39,7 @@ class TaskExecutor:
         self._has_started = False
         self._init_results_registry()
         self.use_multiprocessing = use_multiprocessing
+        self.depends_on = set(depends_on or [])
 
     def __str__(self):
         return f"<TaskExecutor {self.label}[#{self.task_id}] {self.task_handler}>"
@@ -168,6 +171,7 @@ class TaskExecutor:
             "trace": trace_log,
             "status": status,
             "has_failed": has_failed,
+            "output": result
         }
 
 
@@ -261,16 +265,20 @@ class TaskRunner:
         self.tasks = list()
         self.started_tasks = list()
         self.time_started = None
-        
+
         self._task_handler = None
         self._total_tasks = 0
         self._executed_tasks = 0
         self._has_started = False
 
+        self._failed_tasks = set()
+        self._terminated_tasks = set()
+        self._successful_tasks = set()
+
     def __len__(self):
         return self._total_tasks
 
-    def add_task(self, task, *args, label=None, **kwargs):
+    def add_task(self, task, *args, label=None, depends_on=None, **kwargs):
         """
         Add a task to the task queue to be executed.
 
@@ -278,6 +286,7 @@ class TaskRunner:
             task (callable): The function or task handler to execute.
             *args: Arguments to pass to the task.
             label (str): Unique key label for the task (default is the task ID).
+            depends_on (list): list of labels on which it depends
             **kwargs: Additional keyword arguments for the task.
         """
 
@@ -289,13 +298,24 @@ class TaskRunner:
 
         task_id = len(self.tasks)
         label = label or task_id
+        depends_on = set(depends_on or [])
 
         if label in (t.label for t in self.tasks):
             raise ValueError(f"Duplicate task key label: '{label}' already exists.")
 
+        if label in depends_on:
+            raise ValueError(f"Task '{label}' cannot depend on itself.")
+
+        # Optional: detect immediate cycles like A->B, B->A
+        for dep_label in depends_on:
+            for t in self.tasks:
+                if t.label == dep_label and label in t.depends_on:
+                    raise ValueError(f"Circular dependency detected between '{label}' and '{dep_label}'.")
+
         task_handler = TaskHandler(task, *args, **kwargs)
         task_executor = TaskExecutor(task_handler, task_id, label, self.results_registry,
-                                     use_multiprocessing=self.use_multiprocessing)
+                                     use_multiprocessing=self.use_multiprocessing,
+                                     depends_on=depends_on)
         self.tasks.append(task_executor)
         self._total_tasks += 1
 
@@ -499,6 +519,7 @@ class TaskRunner:
                     self.show_progress()
 
                 if task.has_failed:
+                    self._failed_tasks.add(task.label)
                     exception = self.results_registry[task.label]['error']
                     trace_back = self.results_registry[task.label]['trace']
                     if self.log_errors or self.fast_fail:
@@ -506,8 +527,9 @@ class TaskRunner:
                     if self.fast_fail:
                         self.log.error(f"terminating execution !")
                         self._terminate_tasks()
-
-                    return False
+                        return False
+                else:
+                    self._successful_tasks.add(task.label)
 
         return cleanup_done
 
@@ -518,7 +540,9 @@ class TaskRunner:
         for _ in range(self.max_concurrency - len(self.started_tasks)):
             if not self.tasks:
                 return
-            task = self.tasks.pop(0)
+            task = self.get_next_runnable_task()
+            if not task:
+                return
             task.start()
             self.started_tasks.append(task)
  
@@ -563,6 +587,7 @@ class TaskRunner:
                 task.terminate()
             if not task.is_results_updated():
                 task.update_results_on_termination()
+                self._terminated_tasks.add(task.label)
 
     def get_active_runner_count(self):
         """
@@ -572,3 +597,21 @@ class TaskRunner:
             int: Count of active/running tasks.
         """
         return sum(1 for task in self.started_tasks if task.is_running())
+
+    def get_next_runnable_task(self):
+        i = 0
+        while i < len(self.tasks):
+            task = self.tasks[i]
+            task.depends_on -= self._successful_tasks
+
+            if any(dep in self._failed_tasks or dep in self._terminated_tasks for dep in task.depends_on):
+                task.update_results_on_termination()
+                self._terminated_tasks.add(task.label)
+                self.tasks.pop(i)
+                continue
+
+            if not task.depends_on:
+                return self.tasks.pop(i)
+
+            i += 1
+        return None
