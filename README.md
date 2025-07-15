@@ -1,4 +1,35 @@
-# Concurra
+<div align="center">
+  <a href="https://pypi.org/project/concurra/">
+    <img src="https://github.com/Concurra/concurra/blob/main/docs/concurra_logo.png?raw=true" alt="Concurra" width="300">
+  </a>
+  <div>
+    <em>A Lightweight Python Library for Parallel Task Execution with Dependency Management</em>
+    <br>
+    <br>
+  </div>
+
+  <!-- Badges -->
+  <a href="https://github.com/Concurra/concurra/actions/workflows/python-tests.yml" target="_blank">
+    <img src="https://github.com/Concurra/concurra/actions/workflows/python-tests.yml/badge.svg?event=push&branch=main" alt="Test">
+  </a>
+  <a href="https://github.com/Concurra/concurra/blob/main/LICENSE" target="_blank">
+    <img src="https://img.shields.io/github/license/Concurra/concurra.svg" alt="License">
+  </a>
+  <a href="https://concurra.readthedocs.io/en/latest/" target="_blank">
+    <img src="https://readthedocs.org/projects/concurra/badge/?version=latest" alt="Documentation Status">
+  </a>
+  <a href="https://pepy.tech/projects/concurra" target="_blank">
+    <img src="https://static.pepy.tech/badge/concurra" alt="PyPI Downloads">
+  </a>
+  <a href="https://pypi.org/project/concurra" target="_blank">
+    <img src="https://img.shields.io/pypi/v/concurra?color=%2334D058&label=pypi%20package" alt="Package version">
+  </a>
+  <a href="https://pypi.org/project/concurra" target="_blank">
+    <img src="https://img.shields.io/pypi/pyversions/concurra.svg?color=%2334D058" alt="Supported Python versions">
+  </a>
+</div>
+
+---
 
 **Concurra** is a Python library for parallel task execution made simple. It provides a high-level interface for managing and executing tasks concurrently using either threads or processes. With built-in features for error handling, timeouts, fast-fail behavior, and progress tracking, Concurra streamlines parallelism without the boilerplate.
 
