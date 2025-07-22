@@ -3,24 +3,24 @@ site_name: Concurra Docs
 theme:
   name: material
   palette:
-  - media: (prefers-color-scheme)
-    toggle:
-      icon: material/lightbulb-auto
-      name: Switch to light mode
-  - media: '(prefers-color-scheme: light)'
-    scheme: default
-    primary: #1573e0
-    accent: amber
-    toggle:
-      icon: material/lightbulb
-      name: Switch to dark mode
-  - media: '(prefers-color-scheme: dark)'
-    scheme: slate
-    primary: #1573e0
-    accent: amber
-    toggle:
-      icon: material/lightbulb-outline
-      name: Switch to system preference
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/lightbulb-auto
+        name: Switch to system preference
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: "#1573e0"
+      accent: amber
+      toggle:
+        icon: material/lightbulb
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: "#1573e0"
+      accent: amber
+      toggle:
+        icon: material/lightbulb-outline
+        name: Switch to light mode
 
 docs_dir: .
 
