@@ -9,14 +9,14 @@ theme:
       name: Switch to light mode
   - media: '(prefers-color-scheme: light)'
     scheme: default
-    primary: teal
+    primary: #1573e0
     accent: amber
     toggle:
       icon: material/lightbulb
       name: Switch to dark mode
   - media: '(prefers-color-scheme: dark)'
     scheme: slate
-    primary: teal
+    primary: #1573e0
     accent: amber
     toggle:
       icon: material/lightbulb-outline
