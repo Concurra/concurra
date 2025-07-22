@@ -2,7 +2,6 @@
 site_name: Concurra Docs
 theme:
   name: material
-  custom_dir: ../en/overrides
   palette:
   - media: (prefers-color-scheme)
     toggle:
