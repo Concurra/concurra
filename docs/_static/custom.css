@@ -1,0 +1,11 @@
+/* Style the logo */
+img.logo {
+  max-height: 170px;
+  padding-top: 5px;
+}
+
+.rst-versions {
+  display: none !important;
+  visibility: hidden;
+  height: 0;
+}
