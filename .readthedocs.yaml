@@ -1,3 +1,9 @@
+sphinx:
+  configuration: docs/conf.py
+
+python:
+  install:
+    - requirements: docs/requirements.txt
 
 
 # Read the Docs configuration file
@@ -12,9 +18,12 @@ build:
   tools:
     python: "3.13"
 
+sphinx:
+  configuration: docs/conf.py
+
 # MkDocs configuration to build the docs site
-mkdocs:
-  configuration: docs/mkdocs.yml
+#mkdocs:
+#  configuration: docs/mkdocs.yml
 
 # Optionally, but recommended,
 # declare the Python requirements required to build your documentation
@@ -22,5 +31,3 @@ mkdocs:
 python:
     install:
     - requirements: docs/requirements.txt
-
-
