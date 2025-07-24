@@ -35,7 +35,7 @@
 
 ---
 
-## 🚀 Features
+# 🚀 Features
 
 - ✅ **Simple API**: Add tasks and execute them in parallel with minimal setup.
 - 🔀 **Parallel Task Execution**: Run multiple tasks concurrently using threading or multiprocessing.
@@ -49,7 +49,7 @@
 
 ---
 
-## Why Not Just Use Native `threading` or `multiprocessing`?
+# Why Not Just Use Native threading or multiprocessing ?
 
 Python offers `threading`, `multiprocessing`, and executors like `ThreadPoolExecutor`. These are great—but Concurra adds structure, safety, and simplicity:
 
@@ -68,108 +68,35 @@ Python offers `threading`, `multiprocessing`, and executors like `ThreadPoolExec
 
 ---
 
-🧠 How Concurra Works
-
-To use Concurra effectively, follow these steps:
-
-- Create a TaskRunner object – Configure parallelism and behavior (e.g. max workers, timeout).
-
-- Add tasks using .add_task() – You can add any callable with args and a label.
-
-- Run tasks using .run() or .execute_in_background() – Starts concurrent execution.
-
-⚠️ Important Notes:
-
-- A TaskRunner object can be run only once.
-
-- Once run() or execute_in_background() is called, you cannot add more tasks.
-
-- For a new batch of parallel tasks, create a new TaskRunner object and add required tasks.
-
----
-
-## 📦 Installation
+# 📦 Installation
 
 ```bash
 pip install concurra
 ```
 
-## ⚙️ TaskRunner Options and Configuration
-
-When initializing `TaskRunner`, you can customize behavior using the following parameters:
-
-```python
-runner = concurra.TaskRunner(
-    max_concurrency=4,
-    name="MyRunner",
-    timeout=10,
-    progress_stats=True,
-    fast_fail=True,
-    use_multiprocessing=False,
-    logger=my_logger,
-    log_errors=True
-)
-```
-
-### Option Descriptions:
-
-- **`max_concurrency` (int)** – Maximum number of tasks allowed to run in parallel. Defaults to `os.cpu_count()` if not specified.
-- **`name` (str)** – Optional name for the runner instance, used in logs and display outputs.
-- **`timeout` (float)** – Maximum duration (in seconds) for any task to complete. Tasks exceeding this are terminated.
-- **`progress_stats` (bool)** – Whether to show real-time task progress in the console. Defaults to `True`.
-- **`fast_fail` (bool)** – If `True`, execution halts as soon as any task fails. Remaining tasks are aborted.
-- **`use_multiprocessing` (bool)** – Use multiprocessing (separate processes) instead of multithreading. Recommended for CPU-bound tasks.
-- **`logger` (Logger)** – Custom Python `Logger` instance. If not provided, a default logger is used.
-- **`log_errors` (bool)** – Whether to log exceptions that occur during task execution to the logger.
 ---
 
-## ➕ `add_task()` Method Options
+# 🚀 Quick Start
+Run your first parallel tasks in under a minute with Concurra.
 
-Use `.add_task()` to queue up functions to run concurrently.
+This quick guide will walk you through how to:
 
-```python
-runner.add_task(some_function, arg1, arg2, label="task_name", kwarg1=value1)
-```
+- Set up a `TaskRunner` for concurrent execution
+- Add tasks using any Python function
+- Run and collect results with minimal boilerplate
 
-### Option Descriptions:
 
-- **`task` (callable)** – The function or callable you want to execute in parallel.
-- **`*args`** – Positional arguments to pass to the task.
-- **`label` (str)** – A unique identifier for the task. If not provided, the task's ID number is used.
-- **`**kwargs`** – Additional keyword arguments passed to the task.
-
-> 🔐 Note: Task labels must be unique per runner instance. Re-using a label raises a `ValueError`.
-
----
-
-## 🏃‍♂️ `run()` Method Options
-
-When you call `.run()` on a `TaskRunner` object, you can customize its behavior using the following parameters:
-
-```python
-results = runner.run(
-    verify=True,
-    raise_exception=False,
-    error_message="Custom failure message"
-)
-```
-
-### Option Descriptions:
-
-- **`verify` (bool)** – Whether to automatically check if all tasks succeeded after execution. If any task failed, it logs a report or raises an exception depending on the next flag.
-- **`raise_exception` (bool)** – If `True`, raises a Python `Exception` when any task fails. If `False`, failures are logged but not raised.
-- **`error_message` (str)** – Optional custom message to include if `raise_exception=True` and an error occurs.
-
-These options are useful when you're integrating Concurra into pipelines, tests, or automated workflows and need fine-grained error control.
-
----
-
-## 👋 Hello World (Quick Start)
-
-Run your first parallel tasks in under a minute:
+### Step 1: Create a `TaskRunner` object  
+Configure parallelism and behavior like maximum concurrency or timeout.
 
 ```python
 import concurra
+
+runner = concurra.TaskRunner(max_concurrency=2)
+```
+
+
+```python
 
 def say_hello():
     return "Hello World"
@@ -202,9 +129,89 @@ print(results)
     }
 }
 ```
+
+⚠️ Important Notes:
+
+- A TaskRunner object can be run only once.
+
+- Once run() or execute_in_background() is called, you cannot add more tasks.
+
+- For a new batch of parallel tasks, create a new TaskRunner object and add required tasks.
+
 ---
 
-## ✅ Basic Usage (All Tasks Pass)
+# API Reference
+
+### ⚙️ `TaskRunner` Class
+
+When initializing `TaskRunner`, you can customize behavior using the following parameters:
+
+```python
+runner = concurra.TaskRunner(
+    max_concurrency=4,
+    name="MyRunner",
+    timeout=10,
+    progress_stats=True,
+    fast_fail=True,
+    use_multiprocessing=False,
+    logger=my_logger,
+    log_errors=True
+)
+```
+
+***🔧 Parameter Reference:***
+
+- **`max_concurrency` (int)** – Maximum number of tasks allowed to run in parallel. Defaults to `os.cpu_count()` if not specified.
+- **`name` (str)** – Optional name for the runner instance, used in logs and display outputs.
+- **`timeout` (float)** – Maximum duration (in seconds) for any task to complete. Tasks exceeding this are terminated.
+- **`progress_stats` (bool)** – Whether to show real-time task progress in the console. Defaults to `True`.
+- **`fast_fail` (bool)** – If `True`, execution halts as soon as any task fails. Remaining tasks are aborted.
+- **`use_multiprocessing` (bool)** – Use multiprocessing (separate processes) instead of multithreading. Recommended for CPU-bound tasks.
+- **`logger` (Logger)** – Custom Python `Logger` instance. If not provided, a default logger is used.
+- **`log_errors` (bool)** – Whether to log exceptions that occur during task execution to the logger.
+---
+
+### ➕ `add_task()` Method
+
+Use `.add_task()` to queue up functions to run concurrently.
+
+```python
+runner.add_task(some_function, arg1, arg2, label="task_name", kwarg1=value1)
+```
+
+***🔧 Parameter Reference:***
+
+- **`task` (callable)** – The function or callable you want to execute in parallel.
+- **`*args`** – Positional arguments to pass to the task.
+- **`label` (str)** – A unique identifier for the task. If not provided, the task's ID number is used.
+- **`**kwargs`** – Additional keyword arguments passed to the task.
+
+> 🔐 Note: Task labels must be unique per runner instance. Re-using a label raises a `ValueError`.
+
+---
+
+### 🏃‍♂️ `run()` Method
+
+When you call `.run()` on a `TaskRunner` object, you can customize its behavior using the following parameters:
+
+```python
+results = runner.run(
+    verify=True,
+    raise_exception=False,
+    error_message="Custom failure message"
+)
+```
+
+***🔧 Parameter Reference:***
+
+- **`verify` (bool)** – Whether to automatically check if all tasks succeeded after execution. If any task failed, it logs a report or raises an exception depending on the next flag.
+- **`raise_exception` (bool)** – If `True`, raises a Python `Exception` when any task fails. If `False`, failures are logged but not raised.
+- **`error_message` (str)** – Optional custom message to include if `raise_exception=True` and an error occurs.
+
+These options are useful when you're integrating Concurra into pipelines, tests, or automated workflows and need fine-grained error control.
+
+---
+# ✅ Basic Usage (All Tasks Pass)
 
 ```python
 import concurra
@@ -228,9 +235,6 @@ results = runner.run()
 
 print(json.dumps(results, indent=4))
 ```
-
-### Example Output (All Successful):
-
 #### Console Output:
 
 ```
@@ -292,9 +296,7 @@ INFO:concurra.core:
 
 ---
 
-## ⚙️ Advanced Examples (Mixed, Failed, Timed Out, Fail Fast etc.)
-
-### ❌ Example with Partial Failures
+# ❌ Example with Partial Failures
 
 ```python
 import concurra
@@ -320,7 +322,7 @@ results = runner.run()
 print(json.dumps(results, indent=4))
 ```
 
-### Output with Errors (Console)
+#### Console Output:
 
 ```
 INFO:concurra.core:Concurra progress: [######...................] 1/4 [25.0%] in 0 min 0.0 sec
@@ -405,7 +407,7 @@ ZeroDivisionError: division by zero
 
 ---
 
-### ⛔ Fast Fail on First Error
+# ⛔ Example for Fast Fail on First Error
 **Fast Fail (fast_fail=True):** When enabled, TaskRunner will immediately terminate all other tasks as soon as any task fails. This is useful when one failure invalidates the rest of the work or when you want to save resources
 ```python
 import concurra
@@ -479,7 +481,7 @@ RuntimeError: Oops!
 }
 ```
 
-### ⌛ Task Timeout
+# ⌛ Example for Task Timeout
 **Timeout (timeout=SECONDS):** Each task is assigned a maximum allowed time to run. If a task takes longer than this, it will be forcefully stopped and reported as Terminated. This is critical to prevent long-running or hanging operations from blocking your system.
 ```python
 import concurra
@@ -527,7 +529,7 @@ Task 'timeout_task' failed with error: TimeoutError
 
 ---
 
-## 🧪 Testing
+# 🧪 Testing
 
 ```bash
 pytest -sv
@@ -535,7 +537,7 @@ pytest -sv
 
 ---
 
-## 🔐 License
+# 🔐 License
 
 MIT License.
 
