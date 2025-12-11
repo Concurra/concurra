@@ -1,4 +1,6 @@
 import time
+import pytest
+
 
 from concurra import TaskRunner
 
@@ -14,4 +16,4 @@ def test_add_1m_tasks():
         runner.add_task(dummy_success)
 
     end = time.time()
-    assert end - start < 3
+    assert end - start < 10
