@@ -29,3 +29,8 @@ jobs:
     - name: Run tests
       run: pytest test_core.py
 
+    - name: Run Dependent tests
+      run: pytest test_dependent_tasks.py
+
+    - name: Run Performance tests
+      run: pytest test_performance.py
