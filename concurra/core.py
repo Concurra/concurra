@@ -263,6 +263,7 @@ class TaskRunner:
             self.results_registry = dict()
 
         self.tasks = list()
+        self.parents_of_label = dict()
         self.started_tasks = list()
         self.time_started = None
 
@@ -300,7 +301,7 @@ class TaskRunner:
         label = label or task_id
         depends_on = set(depends_on or [])
 
-        if label in (t.label for t in self.tasks):
+        if label in self.parents_of_label:
             raise ValueError(f"Duplicate task key label: '{label}' already exists.")
 
         if label in depends_on:
@@ -308,15 +309,15 @@ class TaskRunner:
 
         # Optional: detect immediate cycles like A->B, B->A
         for dep_label in depends_on:
-            for t in self.tasks:
-                if t.label == dep_label and label in t.depends_on:
-                    raise ValueError(f"Circular dependency detected between '{label}' and '{dep_label}'.")
+            if label in self.parents_of_label.get(dep_label, []):
+                raise ValueError(f"Circular dependency detected between '{label}' and '{dep_label}'.")
 
         task_handler = TaskHandler(task, *args, **kwargs)
         task_executor = TaskExecutor(task_handler, task_id, label, self.results_registry,
                                      use_multiprocessing=self.use_multiprocessing,
                                      depends_on=depends_on)
         self.tasks.append(task_executor)
+        self.parents_of_label[label] = depends_on
         self._total_tasks += 1
 
     def add_func(self, func, *args, **kwargs):
