@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.6 - 2026-06-13
+
+### Fixed
+- Replaced oversized README diagrams with compact PNG versions that fit better in GitHub and PyPI project pages.
+- Pointed README diagram image links at the branch raw URLs so the compact images render before the branch is merged to `main`.
+
 ## 1.1.5 - 2026-06-13
 
 ### Fixed
