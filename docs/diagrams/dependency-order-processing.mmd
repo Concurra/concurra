@@ -1,14 +1,15 @@
-flowchart TD
+%%{init: {"themeVariables": {"fontSize": "28px"}, "flowchart": {"nodeSpacing": 55, "rankSpacing": 75}}}%%
+flowchart LR
     A["receive_order"] --> B["validate_payment"]
     A --> C["check_inventory"]
 
-    B --> D{"payment + inventory ready?"}
+    B --> D{"Payment +<br/>inventory ready?"}
     C --> D
 
     D -- "Yes" --> E["pack_order"]
-    D -- "No" --> F["skip fulfillment"]
+    E --> F["ship_order"]
+    F --> G["send_confirmation"]
+    G --> H["Successful"]
 
-    E --> G["ship_order"]
-    G --> H["send_confirmation"]
-    F --> I["Record status: Terminated"]
-    H --> J["Record status: Successful"]
+    D -- "No" --> I["skip fulfillment"]
+    I --> J["Terminated"]

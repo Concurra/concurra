@@ -1,23 +1,21 @@
-flowchart TD
-    A["TaskRunner"] --> B["Pending task queue"]
-    B --> C{"Dependencies ready?"}
+%%{init: {"themeVariables": {"fontSize": "28px"}, "flowchart": {"nodeSpacing": 55, "rankSpacing": 75}}}%%
+flowchart LR
+    A["TaskRunner"] --> B["Pending queue"]
+    B --> C{"Deps ready<br/>+ slot?"}
 
     C -- "No" --> B
-    C -- "Yes" --> D["Available worker slot"]
+    C -- "Yes" --> D{"Mode"}
 
-    D --> E{"Execution mode"}
+    D --> E["Thread"]
+    D --> F["Process"]
 
-    E --> F["Thread worker"]
-    E --> G["Process worker"]
+    E --> G["Run task"]
+    F --> G
 
-    F --> H["Run task"]
-    G --> H
+    G --> H{"Outcome"}
 
-    H --> I{"Completed successfully?"}
+    H -- "Success" --> I["Successful"]
+    H -- "Failure / timeout" --> J["Failed or<br/>Terminated"]
 
-    I -- "Yes" --> J["Record status: Successful"]
-    I -- "No" --> K["Capture error + traceback"]
-    K --> L["Record status: Failed or Terminated"]
-
-    J --> M["Results dict"]
-    L --> M
+    I --> K["Results dict"]
+    J --> K
