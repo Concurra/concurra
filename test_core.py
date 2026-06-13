@@ -116,6 +116,30 @@ def test_task_timeout():
     assert results["slow_task"]["status"] in ["TimedOut", "Failed", "Terminated"]
     assert results["slow_task"]["has_failed"] is True
 
+def test_timeout_is_applied_per_task_not_entire_run():
+    runner = TaskRunner(max_concurrency=1, timeout=0.5, progress_stats=False, logger=LOGGER)
+    runner.add_task(dummy_success, 0.3, label="task1")
+    runner.add_task(dummy_success, 0.3, label="task2")
+
+    results = runner.run()
+
+    assert results["task1"]["has_failed"] is False
+    assert results["task1"]["result"] == 0.6
+    assert results["task2"]["has_failed"] is False
+    assert results["task2"]["result"] == 0.6
+
+def test_thread_timeout_result_is_not_overwritten_after_task_finishes():
+    runner = TaskRunner(timeout=0.1, progress_stats=False, logger=LOGGER)
+    runner.add_task(dummy_success, 0.3, label="slow_task")
+
+    results = runner.run(verify=False)
+    time.sleep(0.4)
+
+    assert results["slow_task"]["status"] == "Terminated"
+    assert results["slow_task"]["has_failed"] is True
+    assert runner.results_registry["slow_task"]["status"] == "Terminated"
+    assert runner.results_registry["slow_task"]["has_failed"] is True
+
 def test_no_tasks():
     runner = TaskRunner(logger=LOGGER)
     results = runner.run()
@@ -183,6 +207,20 @@ def test_abort_task_with_results():
     assert results["long_task"]["status"] in ["Terminated", "Failed"]
     assert results["long_task"]["has_failed"] is True
 
+def test_abort_result_is_not_overwritten_after_thread_finishes():
+    runner = TaskRunner(progress_stats=False, logger=LOGGER)
+    runner.add_task(dummy_success, 0.3, label="long_task")
+    runner.execute_in_background()
+
+    time.sleep(0.1)
+    results = runner.abort()
+    time.sleep(0.4)
+
+    assert results["long_task"]["status"] == "Terminated"
+    assert results["long_task"]["has_failed"] is True
+    assert runner.results_registry["long_task"]["status"] == "Terminated"
+    assert runner.results_registry["long_task"]["has_failed"] is True
+
 def test_add_work_method():
     runner = TaskRunner(logger=LOGGER)
 
@@ -220,4 +258,3 @@ def test_get_active_runner_count():
     # Wait for completion to ensure count drops to 0
     time.sleep(6)
     assert runner.get_active_runner_count() == 0
-

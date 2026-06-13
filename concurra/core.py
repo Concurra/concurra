@@ -33,12 +33,14 @@ class TaskExecutor:
         self.task_id = task_id
         self.label = label
         self.results_registry = results_registry
+        self.use_multiprocessing = use_multiprocessing
+        self._results_lock = None if use_multiprocessing else threading.Lock()
+        self._externally_terminated = False
         self.executor = None
         self.time_started = None
         self.time_finished = None
         self._has_started = False
         self._init_results_registry()
-        self.use_multiprocessing = use_multiprocessing
         self.depends_on = set(depends_on or [])
 
     def __str__(self):
@@ -138,6 +140,12 @@ class TaskExecutor:
         self.results_registry[self.label] = {}
 
     def _record_results(self, result, has_failed, err_message, trace_log, status=None):
+        if self._results_lock:
+            with self._results_lock:
+                return self._record_results_unlocked(result, has_failed, err_message, trace_log, status)
+        return self._record_results_unlocked(result, has_failed, err_message, trace_log, status)
+
+    def _record_results_unlocked(self, result, has_failed, err_message, trace_log, status=None):
         """
         Store execution results, stats, and metadata in the results registry.
 
@@ -150,6 +158,11 @@ class TaskExecutor:
         """
         if not status:
             status = "Failed" if has_failed else "Successful"
+
+        if self._externally_terminated and status != "Terminated":
+            return
+        if status == "Terminated":
+            self._externally_terminated = True
 
         self.time_finished = datetime.now()
         if not self.time_started:
@@ -406,8 +419,7 @@ class TaskRunner:
             dict: A dictionary of task results.
         """
         self._task_handler._state = self.STATE_CLOSING
-        self._task_handler.join(timeout=self.timeout)
-        self._terminate_tasks()
+        self._task_handler.join()
 
         output = dict(self.results_registry)
         if verify:
@@ -514,7 +526,28 @@ class TaskRunner:
         cleanup_done = False
         for idx in reversed(range(len(self.started_tasks))):
             task = self.started_tasks[idx]
-            if task.exitcode is not None:
+            if self._has_task_timed_out(task):
+                task.terminate()
+                task.update_results_on_termination(TimeoutError(f"Task exceeded timeout of {self.timeout} seconds"))
+                if task.executor:
+                    task.executor.join(timeout=0.1)
+                cleanup_done = True
+                del self.started_tasks[idx]
+
+                self._executed_tasks += 1
+                self._failed_tasks.add(task.label)
+                self._terminated_tasks.add(task.label)
+                if self.progress_stats and self._executed_tasks % (self._total_tasks / self.PROGRESS_LOG_DIVISOR) < 1:
+                    self.show_progress()
+
+                if self.log_errors or self.fast_fail:
+                    self.log.error(f"Task '{task.label}' exceeded timeout of {self.timeout} seconds\n")
+                if self.fast_fail:
+                    self.log.error(f"terminating execution !")
+                    self._terminate_tasks()
+                    return False
+
+            elif task.exitcode is not None:
                 task.executor.join(timeout=self.timeout)
                 cleanup_done = True
                 del self.started_tasks[idx]
@@ -585,7 +618,8 @@ class TaskRunner:
             return
 
         self.timeout = 0.1
-        self._task_handler._state = self.STATE_TERMINATED
+        if self._task_handler:
+            self._task_handler._state = self.STATE_TERMINATED
 
         for task in self.started_tasks + self.tasks:
             if task.exitcode is None:
@@ -593,6 +627,11 @@ class TaskRunner:
             if not task.is_results_updated():
                 task.update_results_on_termination()
                 self._terminated_tasks.add(task.label)
+
+    def _has_task_timed_out(self, task):
+        if self.timeout is None or not task.is_running() or not task.time_started:
+            return False
+        return (datetime.now() - task.time_started).total_seconds() >= self.timeout
 
     def get_active_runner_count(self):
         """
