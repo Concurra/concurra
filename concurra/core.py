@@ -391,9 +391,10 @@ class TaskRunner:
         if label in depends_on:
             raise ValueError(f"Task '{label}' cannot depend on itself.")
 
-        cycle = self._find_cycle_from_new_task(label, depends_on)
-        if cycle:
-            raise ValueError(f"Circular dependency detected: {' -> '.join(str(node) for node in cycle)}.")
+        if depends_on:
+            cycle = self._find_cycle_from_new_task(label, depends_on)
+            if cycle:
+                raise ValueError(f"Circular dependency detected: {' -> '.join(str(node) for node in cycle)}.")
 
         task_handler = TaskHandler(task, *args, **kwargs)
         task_executor = TaskExecutor(task_handler, task_id, label, self.results_registry,

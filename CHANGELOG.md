@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.7 - 2026-06-13
+
+### Fixed
+- Restored fast task registration for dependency-free tasks by skipping cycle detection when `depends_on` is empty.
+
 ## 1.1.6 - 2026-06-13
 
 ### Fixed
