@@ -143,7 +143,7 @@ print(results["greet_universe"]["result"])  # "Hello Universe"
 ### Execution model
 Concurra keeps tasks in a pending queue, starts only tasks whose dependencies are ready, runs them through thread or process workers, and records structured results.
 
-![Concurra execution model](https://raw.githubusercontent.com/Concurra/concurra/main/docs/diagrams/execution-model.png)
+![Concurra execution model](https://raw.githubusercontent.com/Concurra/concurra/4848855bf32cbead84081b513e90fc3d0d38a30a/docs/diagrams/execution-model.png)
 
 ### Threads vs. Processes
 By default Concurra runs tasks in **threads**, which is ideal for **I/O-bound** work (network calls, disk, subprocess waits). For **CPU-bound** work, set `use_multiprocessing=True` to run tasks in separate **processes** and bypass the GIL.
@@ -175,7 +175,7 @@ runner = concurra.TaskRunner(
 
 > ℹ️ The result for each task includes an `execution_mode` field (`"process"`, `"thread"`, or `"thread_fallback"`) so you always know how it ran.
 
-![Concurra execution modes and thread fallback](https://raw.githubusercontent.com/Concurra/concurra/main/docs/diagrams/execution-modes.png)
+![Concurra execution modes and thread fallback](https://raw.githubusercontent.com/Concurra/concurra/4848855bf32cbead84081b513e90fc3d0d38a30a/docs/diagrams/execution-modes.png)
 
 ### Termination semantics
 - **Processes** (`use_multiprocessing=True`) can be **force-terminated** on timeout or `abort()`.
@@ -361,7 +361,7 @@ Print/log a status report of all tasks and optionally raise if any failed. Raise
 ### Task lifecycle
 Every task starts in the pending queue and eventually records a terminal status. Successful tasks return normally, failed tasks capture an exception and traceback, and terminated tasks include timeouts, aborts, fast-fail cascades, and dependency skips.
 
-![Concurra task lifecycle and status](https://raw.githubusercontent.com/Concurra/concurra/main/docs/diagrams/task-lifecycle.png)
+![Concurra task lifecycle and status](https://raw.githubusercontent.com/Concurra/concurra/4848855bf32cbead84081b513e90fc3d0d38a30a/docs/diagrams/task-lifecycle.png)
 
 ---
 
@@ -620,7 +620,7 @@ for label, info in results.items():
 ```
 
 ***⚙️ Dependency Diagram***
-![Concurra dependency scheduling example](https://raw.githubusercontent.com/Concurra/concurra/main/docs/diagrams/dependency-order-processing.png)
+![Concurra dependency scheduling example](https://raw.githubusercontent.com/Concurra/concurra/4848855bf32cbead84081b513e90fc3d0d38a30a/docs/diagrams/dependency-order-processing.png)
 
 ***✅ How It Works***
 - `receive_order` starts first.

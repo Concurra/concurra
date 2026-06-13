@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.5 - 2026-06-13
+
+### Fixed
+- Fixed README diagram image URLs so GitHub branch views and PyPI render the generated PNG diagrams before the branch is merged to `main`.
+
 ## 1.1.4 - 2026-06-13
 
 ### Added
