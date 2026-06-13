@@ -298,7 +298,8 @@ class TaskRunner:
             raise TypeError(f"The provided task '{task}' is not callable.")
 
         task_id = len(self.tasks)
-        label = label or task_id
+        if label is None:
+            label = task_id
         depends_on = set(depends_on or [])
 
         if label in self.parents_of_label:
@@ -307,10 +308,9 @@ class TaskRunner:
         if label in depends_on:
             raise ValueError(f"Task '{label}' cannot depend on itself.")
 
-        # Optional: detect immediate cycles like A->B, B->A
-        for dep_label in depends_on:
-            if label in self.parents_of_label.get(dep_label, []):
-                raise ValueError(f"Circular dependency detected between '{label}' and '{dep_label}'.")
+        cycle = self._find_cycle_from_new_task(label, depends_on)
+        if cycle:
+            raise ValueError(f"Circular dependency detected: {' -> '.join(str(node) for node in cycle)}.")
 
         task_handler = TaskHandler(task, *args, **kwargs)
         task_executor = TaskExecutor(task_handler, task_id, label, self.results_registry,
@@ -381,6 +381,10 @@ class TaskRunner:
         if self._has_started:
             raise RuntimeError("TaskRunner has already started execution. "
                                "Create a new TaskRunner instance to add tasks and run again.")
+        self._validate_dependency_labels()
+        cycle = self._find_dependency_cycle(self.parents_of_label)
+        if cycle:
+            raise ValueError(f"Circular dependency detected: {' -> '.join(str(node) for node in cycle)}.")
         self._has_started = True
         self.time_started = datetime.now()
         self._start_new_tasks()
@@ -615,4 +619,73 @@ class TaskRunner:
                 return self.tasks.pop(i)
 
             i += 1
+        return None
+
+    def _validate_dependency_labels(self):
+        known_labels = set(self.parents_of_label)
+        missing_dependencies = {
+            label: dependencies - known_labels
+            for label, dependencies in self.parents_of_label.items()
+            if dependencies - known_labels
+        }
+        if missing_dependencies:
+            details = ", ".join(
+                f"{label} depends on {sorted(dependencies)}"
+                for label, dependencies in missing_dependencies.items()
+            )
+            raise ValueError(f"Unknown task dependency label(s): {details}.")
+
+    def _find_cycle_from_new_task(self, label, depends_on):
+        path = [label]
+        visited = set()
+
+        def visit(dependency):
+            if dependency == label:
+                return path + [label]
+            if dependency in visited:
+                return None
+
+            visited.add(dependency)
+            path.append(dependency)
+            for parent_dependency in self.parents_of_label.get(dependency, set()):
+                cycle = visit(parent_dependency)
+                if cycle:
+                    return cycle
+            path.pop()
+            return None
+
+        for dependency in depends_on:
+            cycle = visit(dependency)
+            if cycle:
+                return cycle
+        return None
+
+    def _find_dependency_cycle(self, dependency_graph):
+        visiting = set()
+        visited = set()
+        path = []
+
+        def visit(label):
+            if label in visited:
+                return None
+            if label in visiting:
+                cycle_start = path.index(label)
+                return path[cycle_start:] + [label]
+
+            visiting.add(label)
+            path.append(label)
+            for dependency in dependency_graph.get(label, set()):
+                if dependency in dependency_graph:
+                    cycle = visit(dependency)
+                    if cycle:
+                        return cycle
+            path.pop()
+            visiting.remove(label)
+            visited.add(label)
+            return None
+
+        for label in dependency_graph:
+            cycle = visit(label)
+            if cycle:
+                return cycle
         return None

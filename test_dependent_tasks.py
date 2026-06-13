@@ -106,6 +106,37 @@ def test_two_way_circular_dependency():
     with pytest.raises(ValueError, match="Circular dependency detected"):
         runner.add_task(dummy, label="B", depends_on={"A"})
 
+def test_longer_circular_dependency():
+    runner = TaskRunner()
+    runner.add_task(dummy, label="A", depends_on={"C"})
+    runner.add_task(dummy, label="B", depends_on={"A"})
+
+    with pytest.raises(ValueError, match="Circular dependency detected"):
+        runner.add_task(dummy, label="C", depends_on={"B"})
+
+def test_unknown_dependency_fails_before_execution():
+    runner = TaskRunner()
+    runner.add_task(dummy, label="A", depends_on={"missing"})
+
+    with pytest.raises(ValueError, match="Unknown task dependency label"):
+        runner.run()
+
+def test_forward_dependency_reference_is_allowed():
+    order = []
+
+    def task_a():
+        order.append("A")
+
+    def task_b():
+        order.append("B")
+
+    runner = TaskRunner(max_concurrency=2)
+    runner.add_task(task_b, label="B", depends_on={"A"})
+    runner.add_task(task_a, label="A")
+    runner.run()
+
+    assert order == ["A", "B"]
+
 def test_concurrency_and_dependency_timing():
     def make_task(label, sleep_time=0):
         def task():
