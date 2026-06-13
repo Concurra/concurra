@@ -1,0 +1,14 @@
+flowchart TD
+    A["receive_order"] --> B["validate_payment"]
+    A --> C["check_inventory"]
+
+    B --> D{"payment + inventory ready?"}
+    C --> D
+
+    D -- "Yes" --> E["pack_order"]
+    D -- "No" --> F["skip fulfillment"]
+
+    E --> G["ship_order"]
+    G --> H["send_confirmation"]
+    F --> I["Record status: Terminated"]
+    H --> J["Record status: Successful"]

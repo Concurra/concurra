@@ -1,0 +1,19 @@
+flowchart TD
+    A["TaskRunner config"] --> B{"use_multiprocessing?"}
+
+    B -- "False" --> C["Thread worker"]
+    C --> D["execution_mode = thread"]
+    D --> E["Shared parent memory + GIL-bound"]
+
+    B -- "True" --> F{"Task picklable?"}
+
+    F -- "Yes" --> G["Process worker"]
+    G --> H["execution_mode = process"]
+    H --> I["Process isolation + CPU parallelism"]
+
+    F -- "No + fallback enabled" --> J["Thread fallback"]
+    J --> K["execution_mode = thread_fallback"]
+    K --> L["Warning recorded + no process isolation"]
+
+    F -- "No + fallback disabled" --> M["Task marked Failed"]
+    M --> N["Pickling error recorded"]

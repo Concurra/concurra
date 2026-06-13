@@ -1,0 +1,23 @@
+flowchart TD
+    A["TaskRunner"] --> B["Pending task queue"]
+    B --> C{"Dependencies ready?"}
+
+    C -- "No" --> B
+    C -- "Yes" --> D["Available worker slot"]
+
+    D --> E{"Execution mode"}
+
+    E --> F["Thread worker"]
+    E --> G["Process worker"]
+
+    F --> H["Run task"]
+    G --> H
+
+    H --> I{"Completed successfully?"}
+
+    I -- "Yes" --> J["Record status: Successful"]
+    I -- "No" --> K["Capture error + traceback"]
+    K --> L["Record status: Failed or Terminated"]
+
+    J --> M["Results dict"]
+    L --> M
