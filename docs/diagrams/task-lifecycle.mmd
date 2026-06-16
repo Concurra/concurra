@@ -1,0 +1,22 @@
+flowchart TD
+    A["Pending task"] --> B{"Can start?"}
+
+    B -- "Dependencies ready + worker free" --> C["Running task"]
+    B -- "Dependency failed or terminated" --> D["Skip task"]
+    B -- "Abort before start" --> E["Mark as Terminated"]
+    B -- "Unpicklable multiprocessing task + no fallback" --> F["Mark as Failed"]
+
+    C --> G{"Task outcome"}
+
+    G -- "Returns normally" --> H["Record status: Successful"]
+    G -- "Raises exception" --> I["Record status: Failed"]
+    G -- "Timeout, abort, or fast-fail cascade" --> J["Record status: Terminated"]
+
+    D --> K["Record status: Terminated"]
+    E --> K
+
+    H --> L["Results dict"]
+    I --> L
+    J --> L
+    K --> L
+    F --> L

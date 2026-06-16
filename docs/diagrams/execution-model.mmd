@@ -1,0 +1,21 @@
+%%{init: {"themeVariables": {"fontSize": "28px"}, "flowchart": {"nodeSpacing": 55, "rankSpacing": 75}}}%%
+flowchart LR
+    A["TaskRunner"] --> B["Pending queue"]
+    B --> C{"Deps ready<br/>+ slot?"}
+
+    C -- "No" --> B
+    C -- "Yes" --> D{"Mode"}
+
+    D --> E["Thread"]
+    D --> F["Process"]
+
+    E --> G["Run task"]
+    F --> G
+
+    G --> H{"Outcome"}
+
+    H -- "Success" --> I["Successful"]
+    H -- "Failure / timeout" --> J["Failed or<br/>Terminated"]
+
+    I --> K["Results dict"]
+    J --> K

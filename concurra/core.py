@@ -4,7 +4,9 @@ import traceback
 import threading
 import multiprocessing
 import logging
+from collections.abc import Iterable, Mapping
 from datetime import datetime
+from multiprocessing.reduction import ForkingPickler
 from tabulate import tabulate
 
 LOGGER = logging.getLogger(__name__)
@@ -33,12 +35,16 @@ class TaskExecutor:
         self.task_id = task_id
         self.label = label
         self.results_registry = results_registry
+        self.use_multiprocessing = use_multiprocessing
+        self._results_lock = None if use_multiprocessing else threading.Lock()
+        self._externally_terminated = False
+        self.execution_mode = None
+        self.warning = None
         self.executor = None
         self.time_started = None
         self.time_finished = None
         self._has_started = False
         self._init_results_registry()
-        self.use_multiprocessing = use_multiprocessing
         self.depends_on = set(depends_on or [])
 
     def __str__(self):
@@ -80,6 +86,28 @@ class TaskExecutor:
         error_details = f"{type(error).__name__}: {str(error)}"
         self._record_results(None, True, error_details, None, status="Terminated")
 
+    def update_results_on_failure(self, error, warning=None, execution_mode=None):
+        """
+        Force-update the results registry for a task that failed before it could run.
+        """
+        if warning:
+            self.warning = warning
+        if execution_mode is not None:
+            self.execution_mode = execution_mode
+
+        error_details = f"{type(error).__name__}: {str(error)}"
+        trace_log = ''.join(traceback.format_exception(type(error), error, error.__traceback__))
+        self._record_results(None, True, error_details, trace_log, status="Failed")
+
+    def use_thread_fallback(self, warning):
+        """
+        Run this task in a thread even though the runner normally uses processes.
+        """
+        self.use_multiprocessing = False
+        self._results_lock = threading.Lock()
+        self.execution_mode = "thread_fallback"
+        self.warning = warning
+
     def is_results_updated(self):
         """
         Check if the results registry has been updated for this task.
@@ -95,8 +123,12 @@ class TaskExecutor:
         
         if self.use_multiprocessing:
             self.executor = multiprocessing.Process(target=self.run)
+            if self.execution_mode is None:
+                self.execution_mode = "process"
         else:
             self.executor = threading.Thread(target=self.run)
+            if self.execution_mode is None:
+                self.execution_mode = "thread"
         
         self.executor.daemon = True
         self.time_started = datetime.now()
@@ -138,6 +170,27 @@ class TaskExecutor:
         self.results_registry[self.label] = {}
 
     def _record_results(self, result, has_failed, err_message, trace_log, status=None):
+        if self._results_lock:
+            with self._results_lock:
+                return self._record_results_unlocked(result, has_failed, err_message, trace_log, status)
+        return self._record_results_unlocked(result, has_failed, err_message, trace_log, status)
+
+    def _is_already_terminated(self):
+        """
+        Whether this task has already been marked "Terminated".
+
+        Uses the in-process flag (fast path, covers threads) and, for
+        multiprocessing, falls back to the shared registry so a still-running
+        worker process won't overwrite a termination recorded by the parent.
+        """
+        if self._externally_terminated:
+            return True
+        if self.use_multiprocessing:
+            existing = self.results_registry.get(self.label)
+            return bool(existing) and existing.get("status") == "Terminated"
+        return False
+
+    def _record_results_unlocked(self, result, has_failed, err_message, trace_log, status=None):
         """
         Store execution results, stats, and metadata in the results registry.
 
@@ -150,6 +203,15 @@ class TaskExecutor:
         """
         if not status:
             status = "Failed" if has_failed else "Successful"
+
+        # Never let a normal result overwrite a "Terminated" one. For threads the
+        # in-process flag is enough; for multiprocessing the worker is a separate
+        # process (its own copy of the flag), so we also consult the shared
+        # results registry, which the parent updates on termination.
+        if status != "Terminated" and self._is_already_terminated():
+            return
+        if status == "Terminated":
+            self._externally_terminated = True
 
         self.time_finished = datetime.now()
         if not self.time_started:
@@ -171,7 +233,9 @@ class TaskExecutor:
             "trace": trace_log,
             "status": status,
             "has_failed": has_failed,
-            "output": result
+            "output": result,
+            "execution_mode": self.execution_mode,
+            "warning": self.warning
         }
 
 
@@ -217,7 +281,7 @@ class TaskHandler:
         Returns:
             str: A string representing the TaskHandler, including the task name.
         """
-        return f"<TaskRunner: {self.name}>"
+        return f"<TaskHandler: {self.name}>"
 
 
 class TaskRunner:
@@ -227,9 +291,11 @@ class TaskRunner:
     STATE_TERMINATED = 2
     MAINTENANCE_INTERVAL = 0.1  # seconds
     PROGRESS_LOG_DIVISOR = 10   # log progress every (total_tasks / this)
+    SHUTDOWN_GRACE = 0.1        # seconds to wait when reaping/terminating tasks
 
     def __init__(self, max_concurrency=None, name=None, timeout=None, progress_stats=True, fast_fail=False, 
-                 use_multiprocessing=False, logger=None, log_errors=False):
+                 use_multiprocessing=False, logger=None, log_errors=False,
+                 fallback_to_thread_on_pickle_error=False):
         """
         Initialize the TaskRunner.
 
@@ -242,12 +308,13 @@ class TaskRunner:
             use_multiprocessing (bool): Whether to use multiprocessing instead of multithreading.
             logger (Logger, optional): Custom logger instance to use for logging messages. 
             log_errors (bool): Whether to log errors encountered during task execution.
+            fallback_to_thread_on_pickle_error (bool): When multiprocessing is enabled, run unpicklable tasks in a thread instead of marking them failed.
         """
 
         self.log = logger or LOGGER
         self.max_concurrency = max_concurrency or os.cpu_count()
         if self.max_concurrency < 1:
-            self.log.warning("Max worker count is 1, task will not run in parallel")
+            self.log.warning("max_concurrency must be >= 1; resetting to 1, tasks will not run in parallel")
             self.max_concurrency = 1
         self.timeout = timeout
         self.name = name or self.__class__.__name__
@@ -255,6 +322,7 @@ class TaskRunner:
         self.fast_fail = fast_fail
         self.use_multiprocessing = use_multiprocessing
         self.log_errors = log_errors
+        self.fallback_to_thread_on_pickle_error = fallback_to_thread_on_pickle_error
 
         if use_multiprocessing:
             manager = multiprocessing.Manager()
@@ -271,6 +339,13 @@ class TaskRunner:
         self._total_tasks = 0
         self._executed_tasks = 0
         self._has_started = False
+        self._terminating = False
+
+        # Guards runner-level bookkeeping (started_tasks, counters, task sets)
+        # that is mutated by both the maintenance thread and the caller thread
+        # (e.g. abort()). Reentrant because _cleanup_finished_tasks may call
+        # _terminate_tasks while already holding the lock.
+        self._state_lock = threading.RLock()
 
         self._failed_tasks = set()
         self._terminated_tasks = set()
@@ -290,15 +365,24 @@ class TaskRunner:
             depends_on (list): list of labels on which it depends
             **kwargs: Additional keyword arguments for the task.
         """
+        self._add_task(task, args, kwargs, label=label, depends_on=depends_on)
 
+    def _add_task(self, task, args, kwargs, label=None, depends_on=None):
+        """
+        Internal task registration that takes the task's ``args``/``kwargs`` as
+        explicit containers rather than via ``*args``/``**kwargs``. This keeps
+        the framework's ``label``/``depends_on`` parameters from colliding with
+        task arguments that happen to share those names.
+        """
         if self._has_started:
             raise RuntimeError("Cannot add tasks after execution has started.")
-    
+
         if not callable(task):
             raise TypeError(f"The provided task '{task}' is not callable.")
 
         task_id = len(self.tasks)
-        label = label or task_id
+        if label is None:
+            label = task_id
         depends_on = set(depends_on or [])
 
         if label in self.parents_of_label:
@@ -307,10 +391,10 @@ class TaskRunner:
         if label in depends_on:
             raise ValueError(f"Task '{label}' cannot depend on itself.")
 
-        # Optional: detect immediate cycles like A->B, B->A
-        for dep_label in depends_on:
-            if label in self.parents_of_label.get(dep_label, []):
-                raise ValueError(f"Circular dependency detected between '{label}' and '{dep_label}'.")
+        if depends_on:
+            cycle = self._find_cycle_from_new_task(label, depends_on)
+            if cycle:
+                raise ValueError(f"Circular dependency detected: {' -> '.join(str(node) for node in cycle)}.")
 
         task_handler = TaskHandler(task, *args, **kwargs)
         task_executor = TaskExecutor(task_handler, task_id, label, self.results_registry,
@@ -321,8 +405,22 @@ class TaskRunner:
         self._total_tasks += 1
 
     def add_func(self, func, *args, **kwargs):
+        """
+        Add a task, using the reserved ``key`` keyword as its unique label.
+
+        Args:
+            func (callable): The function to execute.
+            *args: Positional arguments forwarded to ``func``.
+            **kwargs: Keyword arguments forwarded to ``func``.
+
+        Note:
+            ``key`` is reserved: it is consumed as the task label and is NOT
+            forwarded to ``func``. If your function needs a parameter literally
+            named ``key``, use ``add_function(func, kwargs={"key": ...}, key=label)``
+            or ``add_task`` instead.
+        """
         key = kwargs.pop("key", None)
-        self.add_task(func, *args, label=key, **kwargs)
+        self._add_task(func, args, kwargs, label=key)
 
     def add_work(self, workload):
         """
@@ -352,9 +450,20 @@ class TaskRunner:
             kwargs = work[2] if len(work) > 2 else {}
             label = work[3] if len(work) > 3 else None
 
-            self.add_task(func, *args, label=label, **kwargs)
+            if not isinstance(args, Iterable):
+                raise TypeError(
+                    f"Workload item at index {i}: 'args' must be an iterable such as a tuple "
+                    f"or list, got {type(args).__name__}. Did you mean ({func.__name__ if callable(func) else func!r}, ({args!r},))?"
+                )
+            if not isinstance(kwargs, Mapping):
+                raise TypeError(
+                    f"Workload item at index {i}: 'kwargs' must be a mapping such as a dict, "
+                    f"got {type(kwargs).__name__}."
+                )
 
-    def add_function(self, func, args=None, kwargs=None, key=None, log_exception=True):
+            self._add_task(func, args, kwargs, label=label)
+
+    def add_function(self, func, args=None, kwargs=None, key=None, log_exception=True, depends_on=None):
         """
         Adds a single function to the task runner.
 
@@ -364,11 +473,12 @@ class TaskRunner:
             kwargs (dict, optional): Keyword arguments for the function.
             key (str, optional): Unique label for the task. If None, task ID will be used.
             log_exception (bool): Whether to log exceptions if task fails. (Unused, kept for backward compatibility of old library)
+            depends_on (list, optional): Labels this task depends on.
         """
 
         args = args or ()
         kwargs = kwargs or {}
-        self.add_task(func, *args, label=key, **kwargs)
+        self._add_task(func, args, kwargs, label=key, depends_on=depends_on)
 
     def execute_in_background(self):
         """
@@ -381,6 +491,7 @@ class TaskRunner:
         if self._has_started:
             raise RuntimeError("TaskRunner has already started execution. "
                                "Create a new TaskRunner instance to add tasks and run again.")
+        self._validate_dependency_labels()
         self._has_started = True
         self.time_started = datetime.now()
         self._start_new_tasks()
@@ -402,8 +513,7 @@ class TaskRunner:
             dict: A dictionary of task results.
         """
         self._task_handler._state = self.STATE_CLOSING
-        self._task_handler.join(timeout=self.timeout)
-        self._terminate_tasks()
+        self._task_handler.join()
 
         output = dict(self.results_registry)
         if verify:
@@ -453,7 +563,7 @@ class TaskRunner:
         Returns:
             bool: True if the tasks are still running, False otherwise.
         """
-        return bool(self._task_handler and self._task_handler._state == 0)
+        return bool(self._task_handler and self._task_handler._state == self.STATE_RUNNING)
     
     def abort(self):
         """
@@ -476,7 +586,6 @@ class TaskRunner:
             error_message (str): Custom error message to include in the exception.
         """
         error_message = error_message or "Execution Failed"
-        excution_type = 'multiprocessing' if self.use_multiprocessing else 'multithreading'
         if self.is_running():
             raise Exception("Execution is still in progress")
         
@@ -508,44 +617,138 @@ class TaskRunner:
         """
 
         cleanup_done = False
-        for idx in reversed(range(len(self.started_tasks))):
-            task = self.started_tasks[idx]
-            if task.exitcode is not None:
-                task.executor.join(timeout=self.timeout)
-                cleanup_done = True
-                del self.started_tasks[idx]
+        with self._state_lock:
+            for idx in reversed(range(len(self.started_tasks))):
+                task = self.started_tasks[idx]
+                if self._has_task_timed_out(task):
+                    # Terminate and join first to give the worker a chance to die
+                    # before we record. Result integrity itself is guaranteed by
+                    # the termination guard in TaskExecutor._record_results, which
+                    # stops a lingering worker (thread or process) from overwriting
+                    # the "Terminated" result afterwards.
+                    task.terminate()
+                    if task.executor:
+                        task.executor.join(timeout=self.SHUTDOWN_GRACE)
+                    task.update_results_on_termination(
+                        TimeoutError(f"Task exceeded timeout of {self.timeout} seconds"))
+                    cleanup_done = True
+                    del self.started_tasks[idx]
 
-                self._executed_tasks += 1
-                if self.progress_stats and self._executed_tasks % (self._total_tasks / self.PROGRESS_LOG_DIVISOR) < 1:
-                    self.show_progress()
-
-                if task.has_failed:
+                    self._executed_tasks += 1
                     self._failed_tasks.add(task.label)
-                    exception = self.results_registry[task.label]['error']
-                    trace_back = self.results_registry[task.label]['trace']
+                    self._terminated_tasks.add(task.label)
+                    self._log_progress_if_due()
+
                     if self.log_errors or self.fast_fail:
-                        self.log.error(f"{exception} {trace_back}\n")
+                        self.log.error(f"Task '{task.label}' exceeded timeout of {self.timeout} seconds\n")
                     if self.fast_fail:
-                        self.log.error(f"terminating execution !")
+                        self.log.error("terminating execution!")
                         self._terminate_tasks()
                         return False
-                else:
-                    self._successful_tasks.add(task.label)
+
+                elif task.exitcode is not None:
+                    task.executor.join(timeout=self.SHUTDOWN_GRACE)
+                    cleanup_done = True
+                    del self.started_tasks[idx]
+
+                    self._executed_tasks += 1
+                    self._log_progress_if_due()
+
+                    if task.has_failed:
+                        self._failed_tasks.add(task.label)
+                        exception = self.results_registry[task.label]['error']
+                        trace_back = self.results_registry[task.label]['trace']
+                        if self.log_errors or self.fast_fail:
+                            self.log.error(f"{exception} {trace_back}\n")
+                        if self.fast_fail:
+                            self.log.error("terminating execution!")
+                            self._terminate_tasks()
+                            return False
+                    else:
+                        self._successful_tasks.add(task.label)
 
         return cleanup_done
+
+    def _log_progress_if_due(self):
+        """Emit a progress line at most once per PROGRESS_LOG_DIVISOR chunk."""
+        if not self.progress_stats or not self._total_tasks:
+            return
+        step = max(1, self._total_tasks // self.PROGRESS_LOG_DIVISOR)
+        if self._executed_tasks % step == 0:
+            self.show_progress()
 
     def _start_new_tasks(self):
         """
         Start new tasks if there is available capacity for additional workers.
         """
-        for _ in range(self.max_concurrency - len(self.started_tasks)):
-            if not self.tasks:
+        with self._state_lock:
+            if self._terminating:
                 return
-            task = self.get_next_runnable_task()
-            if not task:
-                return
-            task.start()
-            self.started_tasks.append(task)
+            for _ in range(self.max_concurrency - len(self.started_tasks)):
+                if not self.tasks:
+                    return
+                task = self.get_next_runnable_task()
+                if not task:
+                    return
+                if not self._prepare_task_for_execution(task):
+                    self._executed_tasks += 1
+                    self._failed_tasks.add(task.label)
+                    self._log_progress_if_due()
+                    if self.fast_fail:
+                        self.log.error("terminating execution!")
+                        self._terminate_tasks()
+                        return
+                    continue
+                try:
+                    task.start()
+                except Exception as exc:
+                    self._record_start_failure(task, exc)
+                    if self.fast_fail:
+                        self.log.error("terminating execution!")
+                        self._terminate_tasks()
+                        return
+                    continue
+                self.started_tasks.append(task)
+
+    def _prepare_task_for_execution(self, task):
+        if not task.use_multiprocessing:
+            return True
+
+        pickling_error = self._get_pickling_error(task)
+        if pickling_error is None:
+            return True
+
+        if self.fallback_to_thread_on_pickle_error:
+            warning = "Task was not picklable; ran in thread fallback"
+            task.use_thread_fallback(warning)
+            self.log.warning(f"Task '{task.label}' was not picklable; running in thread fallback")
+            return True
+
+        task.update_results_on_failure(
+            pickling_error,
+            warning="Task was not picklable and thread fallback is disabled",
+            execution_mode=None
+        )
+        return False
+
+    @staticmethod
+    def _get_pickling_error(task):
+        try:
+            ForkingPickler.dumps((
+                task.label,
+                task.task_handler.task,
+                task.task_handler.args,
+                task.task_handler.kwargs
+            ))
+        except Exception as exc:
+            return exc
+        return None
+
+    def _record_start_failure(self, task, error):
+        task.update_results_on_failure(error)
+        self._executed_tasks += 1
+        self._failed_tasks.add(task.label)
+        self._log_progress_if_due()
  
     def _handle_tasks(self):
         """
@@ -563,12 +766,16 @@ class TaskRunner:
             time.sleep(self.MAINTENANCE_INTERVAL)
 
         if thread._state == self.STATE_TERMINATED and self.started_tasks:
-            for i in reversed(range(len(self.started_tasks))):
-                task = self.started_tasks[i]
-                if not task.is_results_updated():
-                    task.update_results_on_termination()
-                self.log.info(f"Deleting terminated task: {task.label}, {task.task_name}")
-                del self.started_tasks[i]
+            with self._state_lock:
+                for i in reversed(range(len(self.started_tasks))):
+                    task = self.started_tasks[i]
+                    if not task.is_results_updated():
+                        task.update_results_on_termination(
+                            RuntimeError("Execution terminated before completion"))
+                    self._executed_tasks += 1
+                    self._terminated_tasks.add(task.label)
+                    self.log.info(f"Deleting terminated task: {task.label}, {task.task_name}")
+                    del self.started_tasks[i]
 
     def _terminate_tasks(self):
         """
@@ -577,18 +784,23 @@ class TaskRunner:
         This method forces the termination of tasks and ensures that results are updated.
         """
 
-        if not self.started_tasks:
-            return
+        with self._state_lock:
+            self._terminating = True
+            if self._task_handler:
+                self._task_handler._state = self.STATE_TERMINATED
 
-        self.timeout = 0.1
-        self._task_handler._state = self.STATE_TERMINATED
+            for task in self.started_tasks + self.tasks:
+                if task.exitcode is None:
+                    task.terminate()
+                if not task.is_results_updated():
+                    task.update_results_on_termination(
+                        RuntimeError("Execution terminated before completion"))
+                    self._terminated_tasks.add(task.label)
 
-        for task in self.started_tasks + self.tasks:
-            if task.exitcode is None:
-                task.terminate()
-            if not task.is_results_updated():
-                task.update_results_on_termination()
-                self._terminated_tasks.add(task.label)
+    def _has_task_timed_out(self, task):
+        if self.timeout is None or not task.is_running() or not task.time_started:
+            return False
+        return (datetime.now() - task.time_started).total_seconds() >= self.timeout
 
     def get_active_runner_count(self):
         """
@@ -605,9 +817,13 @@ class TaskRunner:
             task = self.tasks[i]
             task.depends_on -= self._successful_tasks
 
-            if any(dep in self._failed_tasks or dep in self._terminated_tasks for dep in task.depends_on):
-                task.update_results_on_termination()
+            blocking = [dep for dep in task.depends_on
+                        if dep in self._failed_tasks or dep in self._terminated_tasks]
+            if blocking:
+                task.update_results_on_termination(
+                    RuntimeError(f"Skipped: dependency {sorted(blocking, key=str)} failed or was terminated"))
                 self._terminated_tasks.add(task.label)
+                self._executed_tasks += 1
                 self.tasks.pop(i)
                 continue
 
@@ -615,4 +831,43 @@ class TaskRunner:
                 return self.tasks.pop(i)
 
             i += 1
+        return None
+
+    def _validate_dependency_labels(self):
+        known_labels = set(self.parents_of_label)
+        missing_dependencies = {
+            label: dependencies - known_labels
+            for label, dependencies in self.parents_of_label.items()
+            if dependencies - known_labels
+        }
+        if missing_dependencies:
+            details = ", ".join(
+                f"{label} depends on {sorted(dependencies, key=str)}"
+                for label, dependencies in missing_dependencies.items()
+            )
+            raise ValueError(f"Unknown task dependency label(s): {details}.")
+
+    def _find_cycle_from_new_task(self, label, depends_on):
+        path = [label]
+        visited = set()
+
+        def visit(dependency):
+            if dependency == label:
+                return path + [label]
+            if dependency in visited:
+                return None
+
+            visited.add(dependency)
+            path.append(dependency)
+            for parent_dependency in self.parents_of_label.get(dependency, set()):
+                cycle = visit(parent_dependency)
+                if cycle:
+                    return cycle
+            path.pop()
+            return None
+
+        for dependency in depends_on:
+            cycle = visit(dependency)
+            if cycle:
+                return cycle
         return None
