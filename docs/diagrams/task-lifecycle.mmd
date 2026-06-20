@@ -4,9 +4,11 @@ flowchart TD
     B -- "Dependencies ready + worker free" --> C["Running task"]
     B -- "Dependency failed or terminated" --> D["Skip task"]
     B -- "Abort before start" --> E["Mark as Terminated"]
+    B -- "Unpicklable multiprocessing task + fallback enabled" --> M["Run in thread fallback"]
     B -- "Unpicklable multiprocessing task + no fallback" --> F["Mark as Failed"]
 
     C --> G{"Task outcome"}
+    M --> G
 
     G -- "Returns normally" --> H["Record status: Successful"]
     G -- "Raises exception" --> I["Record status: Failed"]

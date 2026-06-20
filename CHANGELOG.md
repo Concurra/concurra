@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.8 - 2026-06-20
+
+### Fixed
+- Updated the task lifecycle diagram to show the multiprocessing thread fallback path.
+- Pointed README diagram image links at the `main` branch for the published release.
+
 ## 1.1.7 - 2026-06-13
 
 ### Fixed
