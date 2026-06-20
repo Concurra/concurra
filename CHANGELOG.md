@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.9 - 2026-06-21
+
+### Added
+- Added `task_retries` for retrying task exceptions with result metadata for attempts and retry errors.
+- Added `add_command` for direct external command execution.
+- Added `add_shell_command` for shell command strings with pipes, redirects, globs, and command chaining.
+
+### Changed
+- Documented command task usage, shell command usage, and task retry examples in the README.
+
 ## 1.1.8 - 2026-06-20
 
 ### Fixed
