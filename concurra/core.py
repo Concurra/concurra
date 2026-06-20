@@ -4,6 +4,7 @@ import traceback
 import threading
 import multiprocessing
 import logging
+import subprocess
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from multiprocessing.reduction import ForkingPickler
@@ -12,13 +13,32 @@ from tabulate import tabulate
 LOGGER = logging.getLogger(__name__)
 
 
+class CommandExecutionError(RuntimeError):
+    """
+    Error raised when an external command exits unsuccessfully.
+    """
+
+    def __init__(self, result):
+        self.result = result
+        stderr = result.get("stderr") or ""
+        stdout = result.get("stdout") or ""
+        details = stderr.strip() or stdout.strip()
+        if len(details) > 500:
+            details = f"{details[:500]}..."
+
+        message = f"Command exited with return code {result['returncode']}"
+        if details:
+            message = f"{message}: {details}"
+        super().__init__(message)
+
+
 class TaskExecutor:
     """
     class for executing tasks while recording runtime results and statistics.
     """
 
     def __init__(self, task_handler, task_id, label, results_registry, use_multiprocessing=False,
-                 depends_on=None):
+                 depends_on=None, task_retries=0):
         """
         Initialize the executor.
 
@@ -28,6 +48,7 @@ class TaskExecutor:
             label: Key used to store results in the results_registry.
             results_registry: Dictionary to store execution metadata and results.
             depends_on: list of dependencies task labels
+            task_retries: Number of times to retry task exceptions after the first attempt.
         """
 
         self.task_handler = task_handler
@@ -40,6 +61,9 @@ class TaskExecutor:
         self._externally_terminated = False
         self.execution_mode = None
         self.warning = None
+        self.task_retries = task_retries
+        self.attempts = 0
+        self.retry_errors = []
         self.executor = None
         self.time_started = None
         self.time_finished = None
@@ -57,14 +81,26 @@ class TaskExecutor:
         result, err_message, has_failed, trace_log = None, None, False, None
         self.time_started = datetime.now()
 
-        try:
-            result = self.task_handler.run()
-        except Exception as e:
-            has_failed = True
-            trace_log = traceback.format_exc()
-            err_message = f"{type(e).__name__}: {str(e)}"
-        finally:
-            self._record_results(result, has_failed, err_message, trace_log)
+        for attempt in range(1, self.task_retries + 2):
+            self.attempts = attempt
+            try:
+                result = self.task_handler.run()
+                has_failed = False
+                err_message = None
+                trace_log = None
+                break
+            except Exception as e:
+                has_failed = True
+                error_result = getattr(e, "result", None)
+                if error_result is not None:
+                    result = error_result
+                trace_log = traceback.format_exc()
+                err_message = f"{type(e).__name__}: {str(e)}"
+                self.retry_errors.append(err_message)
+                if attempt > self.task_retries:
+                    break
+
+        self._record_results(result, has_failed, err_message, trace_log)
 
     def join(self):
         """
@@ -136,6 +172,8 @@ class TaskExecutor:
         self.executor.start()
 
     def terminate(self):
+        if hasattr(self.task_handler, "terminate"):
+            self.task_handler.terminate()
         if self.executor is not None:
             if self.use_multiprocessing:
                 self.executor.terminate()  # For processes
@@ -235,7 +273,11 @@ class TaskExecutor:
             "has_failed": has_failed,
             "output": result,
             "execution_mode": self.execution_mode,
-            "warning": self.warning
+            "warning": self.warning,
+            "attempts": self.attempts if self.attempts else int(self._has_started),
+            "task_retries": self.task_retries,
+            "retried": self.attempts > 1,
+            "retry_errors": list(self.retry_errors)
         }
 
 
@@ -284,6 +326,90 @@ class TaskHandler:
         return f"<TaskHandler: {self.name}>"
 
 
+class CommandTaskHandler:
+    """
+    A task handler for external commands.
+    """
+
+    def __init__(self, command, shell=False, cwd=None, env=None, check=True,
+                 capture_output=True, text=True):
+        self.command = self._validate_command(command, shell)
+        self.shell = shell
+        self.cwd = cwd
+        self.env = None if env is None else {**os.environ, **dict(env)}
+        self.check = check
+        self.capture_output = capture_output
+        self.text = text
+        self.name = "shell_command" if shell else "command"
+        self._process = None
+        self._process_lock = threading.Lock()
+
+    @staticmethod
+    def _validate_command(command, shell):
+        if shell:
+            if not isinstance(command, str):
+                raise TypeError("add_shell_command requires command to be a string.")
+            if not command.strip():
+                raise ValueError("add_shell_command requires a non-empty command string.")
+            return command
+
+        if isinstance(command, str):
+            raise TypeError("add_command requires command to be a list or tuple of strings.")
+        if not isinstance(command, (list, tuple)):
+            raise TypeError("add_command requires command to be a list or tuple of strings.")
+        if not command:
+            raise ValueError("add_command requires at least one command element.")
+        if not all(isinstance(part, str) for part in command):
+            raise TypeError("add_command requires every command element to be a string.")
+        return list(command)
+
+    def run(self):
+        stdout_target = subprocess.PIPE if self.capture_output else None
+        stderr_target = subprocess.PIPE if self.capture_output else None
+
+        with self._process_lock:
+            self._process = subprocess.Popen(
+                self.command,
+                shell=self.shell,
+                cwd=self.cwd,
+                env=self.env,
+                stdout=stdout_target,
+                stderr=stderr_target,
+                text=self.text,
+            )
+
+        stdout, stderr = self._process.communicate()
+        result = {
+            "command": self.command,
+            "shell": self.shell,
+            "returncode": self._process.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+            "cwd": str(self.cwd) if self.cwd is not None else None,
+        }
+
+        if self.check and self._process.returncode != 0:
+            raise CommandExecutionError(result)
+        return result
+
+    def terminate(self):
+        with self._process_lock:
+            process = self._process
+
+        if process is None or process.poll() is not None:
+            return
+
+        process.terminate()
+        try:
+            process.wait(timeout=0.1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=0.1)
+
+    def __str__(self):
+        return f"<CommandTaskHandler: {self.command}>"
+
+
 class TaskRunner:
 
     STATE_RUNNING = 0
@@ -295,7 +421,7 @@ class TaskRunner:
 
     def __init__(self, max_concurrency=None, name=None, timeout=None, progress_stats=True, fast_fail=False, 
                  use_multiprocessing=False, logger=None, log_errors=False,
-                 fallback_to_thread_on_pickle_error=False):
+                 fallback_to_thread_on_pickle_error=False, task_retries=0):
         """
         Initialize the TaskRunner.
 
@@ -309,6 +435,7 @@ class TaskRunner:
             logger (Logger, optional): Custom logger instance to use for logging messages. 
             log_errors (bool): Whether to log errors encountered during task execution.
             fallback_to_thread_on_pickle_error (bool): When multiprocessing is enabled, run unpicklable tasks in a thread instead of marking them failed.
+            task_retries (int): Default number of times to retry task exceptions after the first attempt.
         """
 
         self.log = logger or LOGGER
@@ -323,6 +450,7 @@ class TaskRunner:
         self.use_multiprocessing = use_multiprocessing
         self.log_errors = log_errors
         self.fallback_to_thread_on_pickle_error = fallback_to_thread_on_pickle_error
+        self.task_retries = self._validate_task_retries(task_retries)
 
         if use_multiprocessing:
             manager = multiprocessing.Manager()
@@ -354,7 +482,7 @@ class TaskRunner:
     def __len__(self):
         return self._total_tasks
 
-    def add_task(self, task, *args, label=None, depends_on=None, **kwargs):
+    def add_task(self, task, *args, label=None, depends_on=None, task_retries=None, **kwargs):
         """
         Add a task to the task queue to be executed.
 
@@ -363,22 +491,30 @@ class TaskRunner:
             *args: Arguments to pass to the task.
             label (str): Unique key label for the task (default is the task ID).
             depends_on (list): list of labels on which it depends
+            task_retries (int): Optional per-task retry override.
             **kwargs: Additional keyword arguments for the task.
         """
-        self._add_task(task, args, kwargs, label=label, depends_on=depends_on)
+        self._add_task(task, args, kwargs, label=label, depends_on=depends_on,
+                       task_retries=task_retries)
 
-    def _add_task(self, task, args, kwargs, label=None, depends_on=None):
+    def _add_task(self, task, args, kwargs, label=None, depends_on=None, task_retries=None):
         """
         Internal task registration that takes the task's ``args``/``kwargs`` as
         explicit containers rather than via ``*args``/``**kwargs``. This keeps
         the framework's ``label``/``depends_on`` parameters from colliding with
         task arguments that happen to share those names.
         """
-        if self._has_started:
-            raise RuntimeError("Cannot add tasks after execution has started.")
-
         if not callable(task):
             raise TypeError(f"The provided task '{task}' is not callable.")
+
+        task_handler = TaskHandler(task, *args, **kwargs)
+        self._register_task_handler(task_handler, label=label, depends_on=depends_on,
+                                    task_retries=task_retries)
+
+    def _register_task_handler(self, task_handler, label=None, depends_on=None, task_retries=None,
+                               use_multiprocessing=None, execution_mode=None):
+        if self._has_started:
+            raise RuntimeError("Cannot add tasks after execution has started.")
 
         task_id = len(self.tasks)
         if label is None:
@@ -391,18 +527,69 @@ class TaskRunner:
         if label in depends_on:
             raise ValueError(f"Task '{label}' cannot depend on itself.")
 
+        task_retries = self._validate_task_retries(
+            self.task_retries if task_retries is None else task_retries)
+
         if depends_on:
             cycle = self._find_cycle_from_new_task(label, depends_on)
             if cycle:
                 raise ValueError(f"Circular dependency detected: {' -> '.join(str(node) for node in cycle)}.")
 
-        task_handler = TaskHandler(task, *args, **kwargs)
+        if use_multiprocessing is None:
+            use_multiprocessing = self.use_multiprocessing
         task_executor = TaskExecutor(task_handler, task_id, label, self.results_registry,
-                                     use_multiprocessing=self.use_multiprocessing,
-                                     depends_on=depends_on)
+                                     use_multiprocessing=use_multiprocessing,
+                                     depends_on=depends_on,
+                                     task_retries=task_retries)
+        if execution_mode is not None:
+            task_executor.execution_mode = execution_mode
         self.tasks.append(task_executor)
         self.parents_of_label[label] = depends_on
         self._total_tasks += 1
+
+    def add_command(self, command, label=None, depends_on=None, cwd=None, env=None, check=True,
+                    capture_output=True, text=True, task_retries=None):
+        """
+        Add an external command using direct exec form.
+
+        Args:
+            command (list[str] | tuple[str, ...]): Executable and arguments.
+            label (str): Unique key label for the task.
+            depends_on (list): Labels this command depends on.
+            cwd (str | os.PathLike): Working directory for the command.
+            env (Mapping): Environment overrides merged with the current environment.
+            check (bool): Whether non-zero return codes should fail the task.
+            capture_output (bool): Whether to capture stdout/stderr in the result.
+            text (bool): Whether to decode stdout/stderr as text.
+            task_retries (int): Optional per-task retry override.
+        """
+        handler = CommandTaskHandler(command, shell=False, cwd=cwd, env=env, check=check,
+                                     capture_output=capture_output, text=text)
+        self._register_task_handler(handler, label=label, depends_on=depends_on,
+                                    task_retries=task_retries, use_multiprocessing=False,
+                                    execution_mode="subprocess")
+
+    def add_shell_command(self, command, label=None, depends_on=None, cwd=None, env=None,
+                          check=True, capture_output=True, text=True, task_retries=None):
+        """
+        Add an external command string that is interpreted by the system shell.
+
+        Args:
+            command (str): Shell command string.
+            label (str): Unique key label for the task.
+            depends_on (list): Labels this command depends on.
+            cwd (str | os.PathLike): Working directory for the command.
+            env (Mapping): Environment overrides merged with the current environment.
+            check (bool): Whether non-zero return codes should fail the task.
+            capture_output (bool): Whether to capture stdout/stderr in the result.
+            text (bool): Whether to decode stdout/stderr as text.
+            task_retries (int): Optional per-task retry override.
+        """
+        handler = CommandTaskHandler(command, shell=True, cwd=cwd, env=env, check=check,
+                                     capture_output=capture_output, text=text)
+        self._register_task_handler(handler, label=label, depends_on=depends_on,
+                                    task_retries=task_retries, use_multiprocessing=False,
+                                    execution_mode="subprocess")
 
     def add_func(self, func, *args, **kwargs):
         """
@@ -463,7 +650,8 @@ class TaskRunner:
 
             self._add_task(func, args, kwargs, label=label)
 
-    def add_function(self, func, args=None, kwargs=None, key=None, log_exception=True, depends_on=None):
+    def add_function(self, func, args=None, kwargs=None, key=None, log_exception=True, depends_on=None,
+                     task_retries=None):
         """
         Adds a single function to the task runner.
 
@@ -474,11 +662,21 @@ class TaskRunner:
             key (str, optional): Unique label for the task. If None, task ID will be used.
             log_exception (bool): Whether to log exceptions if task fails. (Unused, kept for backward compatibility of old library)
             depends_on (list, optional): Labels this task depends on.
+            task_retries (int): Optional per-task retry override.
         """
 
         args = args or ()
         kwargs = kwargs or {}
-        self._add_task(func, args, kwargs, label=key, depends_on=depends_on)
+        self._add_task(func, args, kwargs, label=key, depends_on=depends_on,
+                       task_retries=task_retries)
+
+    @staticmethod
+    def _validate_task_retries(task_retries):
+        if isinstance(task_retries, bool) or not isinstance(task_retries, int):
+            raise TypeError("task_retries must be a non-negative integer.")
+        if task_retries < 0:
+            raise ValueError("task_retries must be a non-negative integer.")
+        return task_retries
 
     def execute_in_background(self):
         """

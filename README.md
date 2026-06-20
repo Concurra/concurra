@@ -181,6 +181,34 @@ runner = concurra.TaskRunner(
 - **Processes** (`use_multiprocessing=True`) can be **force-terminated** on timeout or `abort()`.
 - **Threads** cannot be forcibly killed in Python. On timeout/abort a threaded task is **marked `Terminated`** and its result is protected from being overwritten, but the underlying thread continues running to completion in the background. Use multiprocessing if you need hard termination.
 
+### Task retries
+Use `task_retries` when a task may fail transiently and should be attempted again before being marked failed.
+
+```python
+runner = concurra.TaskRunner(task_retries=2)  # up to 3 total attempts per task
+
+runner.add_task(fetch_data, label="fetch_data", task_retries=3)  # per-task override
+```
+
+`task_retries=0` means no retry. `task_retries=2` means the first attempt plus up to two retries. Retries apply to exceptions raised by the task function. Dependency skips, aborts, pickle validation failures, and timeouts are not retried.
+
+### External commands
+Concurra can run external commands in the same scheduler as Python functions.
+
+Use `add_command` for direct exec-form commands. This is the recommended default and mirrors Docker/Kubernetes-style argument lists:
+
+```python
+runner.add_command(["python", "some_tool.py", "--x", "1"], label="tool")
+```
+
+Use `add_shell_command` only when you intentionally need shell syntax such as pipes, redirects, globbing, or command chaining:
+
+```python
+runner.add_shell_command("cat logs/*.txt | grep ERROR > errors.txt", label="filter_errors")
+```
+
+Command tasks run as external OS subprocesses and report `execution_mode == "subprocess"`. They can be mixed with normal Python tasks, dependencies, timeouts, aborts, and `task_retries`.
+
 ---
 
 # 📖 API Reference
@@ -198,6 +226,7 @@ runner = concurra.TaskRunner(
     logger=my_logger,
     log_errors=False,
     fallback_to_thread_on_pickle_error=False,
+    task_retries=0,
 )
 ```
 
@@ -212,10 +241,11 @@ runner = concurra.TaskRunner(
 | `logger` | logging.Logger | Custom logger. If not provided, a default module logger is used. |
 | `log_errors` | bool | Whether to log task exceptions/tracebacks as they occur. |
 | `fallback_to_thread_on_pickle_error` | bool | When multiprocessing is enabled, run unpicklable tasks in a thread instead of marking them failed. |
+| `task_retries` | int | Default number of times to retry task exceptions after the first attempt. Defaults to `0`. |
 
 ---
 
-### ➕ `add_task(task, *args, label=None, depends_on=None, **kwargs)`
+### ➕ `add_task(task, *args, label=None, depends_on=None, task_retries=None, **kwargs)`
 
 Queue a callable to run, with optional positional/keyword arguments, a unique label, and dependencies.
 
@@ -230,6 +260,7 @@ runner.add_task(other_function, label="task2", depends_on=["task1"])
 | `*args` | any | Positional arguments forwarded to `task`. |
 | `label` | hashable | Unique identifier for the task. If omitted, the task's numeric index is used. |
 | `depends_on` | list | Labels this task depends on. It runs only after all of them complete successfully. |
+| `task_retries` | int \| None | Optional per-task retry override. `None` uses the runner default. |
 | `**kwargs` | any | Keyword arguments forwarded to `task`. |
 
 ***📝 Notes***
@@ -264,8 +295,66 @@ runner.add_work([
 
 ***📝 Notes***
 - In `add_func`, `key` is **reserved** as the label and is **not** forwarded to the function. If your function needs a parameter literally named `key`, use `add_function(func, kwargs={"key": ...}, key=label)` or `add_task` instead.
-- `add_func`/`add_work`/`add_function` forward all other keyword arguments (including ones named `label` or `depends_on`) to your task, so they never collide with framework parameters.
+- `add_func`/`add_work`/`add_function` forward all other keyword arguments (including ones named `label`, `depends_on`, or `task_retries`) to your task, so they never collide with framework parameters.
+- In `add_task`, `label`, `depends_on`, and `task_retries` are framework parameters. If your function needs a literal `task_retries` keyword argument, use `add_function(func, kwargs={"task_retries": ...}, key=label)`.
 - In `add_work`, each item must be a tuple of 1–4 elements; `args` must be an iterable and `kwargs` a mapping, otherwise a clear `TypeError`/`ValueError` is raised.
+
+---
+
+### ➕ `add_command(command, label=None, depends_on=None, cwd=None, env=None, check=True, capture_output=True, text=True, task_retries=None)`
+
+Queue an external command using direct exec form. `command` must be a list or tuple of strings.
+
+```python
+runner.add_command(["python", "script.py", "--name", "Mrunal"], label="script")
+```
+
+| Parameter | Type | Description |
+| --------- | ---- | ----------- |
+| `command` | list[str] \| tuple[str, ...] | Executable and arguments. String commands are rejected; use `add_shell_command` for shell strings. |
+| `label` | hashable | Unique identifier for the command task. |
+| `depends_on` | list | Labels this command depends on. |
+| `cwd` | str \| os.PathLike \| None | Working directory for the command. |
+| `env` | mapping \| None | Environment overrides merged with the current process environment. |
+| `check` | bool | If `True`, a non-zero return code marks the task as `Failed`. Defaults to `True`. |
+| `capture_output` | bool | Capture `stdout` and `stderr` into the result. Defaults to `True`. |
+| `text` | bool | Decode output as text. Defaults to `True`. |
+| `task_retries` | int \| None | Optional per-command retry override. |
+
+### ➕ `add_shell_command(command, label=None, depends_on=None, cwd=None, env=None, check=True, capture_output=True, text=True, task_retries=None)`
+
+Queue an external command string that is interpreted by the system shell.
+
+```python
+runner.add_shell_command("python script.py | grep ok", label="filtered")
+```
+
+| Parameter | Type | Description |
+| --------- | ---- | ----------- |
+| `command` | str | Shell command string. List/tuple commands are rejected; use `add_command` for direct exec form. |
+| `label` | hashable | Unique identifier for the command task. |
+| `depends_on` | list | Labels this command depends on. |
+| `cwd` | str \| os.PathLike \| None | Working directory for the command. |
+| `env` | mapping \| None | Environment overrides merged with the current process environment. |
+| `check` | bool | If `True`, a non-zero return code marks the task as `Failed`. Defaults to `True`. |
+| `capture_output` | bool | Capture `stdout` and `stderr` into the result. Defaults to `True`. |
+| `text` | bool | Decode output as text. Defaults to `True`. |
+| `task_retries` | int \| None | Optional per-command retry override. |
+
+Command task results are structured:
+
+```python
+{
+    "command": ["python", "script.py"],
+    "shell": False,
+    "returncode": 0,
+    "stdout": "...",
+    "stderr": "",
+    "cwd": None,
+}
+```
+
+If `check=True` and the command exits non-zero, the Concurra task is marked `Failed`, but the structured command result is still available in `result`/`output`.
 
 ---
 
@@ -355,13 +444,17 @@ Print/log a status report of all tasks and optionally raise if any failed. Raise
 | `trace` | str \| None | Full traceback string when available. |
 | `status` | str | One of `"Successful"`, `"Failed"`, `"Terminated"`. |
 | `has_failed` | bool | `True` for failed or terminated tasks. |
-| `execution_mode` | str \| None | `"thread"`, `"process"`, `"thread_fallback"`, or `None` if the task never started. |
+| `execution_mode` | str \| None | `"thread"`, `"process"`, `"thread_fallback"`, `"subprocess"`, or `None` if the task never started. |
 | `warning` | str \| None | Diagnostic note (e.g. set when a task ran via thread fallback). |
+| `attempts` | int | Number of attempts made for this task. |
+| `task_retries` | int | Retry budget configured for this task. |
+| `retried` | bool | `True` if the task needed more than one attempt. |
+| `retry_errors` | list[str] | Error summaries captured from failed attempts. |
 
 ### Task lifecycle
 Every task starts in the pending queue and eventually records a terminal status. Successful tasks return normally, failed tasks capture an exception and traceback, and terminated tasks include timeouts, aborts, fast-fail cascades, and dependency skips.
 
-![Concurra task lifecycle and status](https://raw.githubusercontent.com/Concurra/concurra/main/docs/diagrams/task-lifecycle.png)
+<img src="https://raw.githubusercontent.com/Concurra/concurra/main/docs/diagrams/task-lifecycle.png" alt="Concurra task lifecycle and status" width="784">
 
 ---
 
@@ -421,7 +514,11 @@ INFO:concurra.core:
     "has_failed": false,
     "output": 16,
     "execution_mode": "thread",
-    "warning": null
+    "warning": null,
+    "attempts": 1,
+    "task_retries": 0,
+    "retried": false,
+    "retry_errors": []
 }
 ```
 
@@ -466,6 +563,111 @@ print(results["divide_by_zero"]["error"])    # "ZeroDivisionError: division by z
 ```
 
 > To turn failures into a raised exception, pass `run(raise_exception=True)`.
+
+---
+
+# 🔁 Example: Task Retries
+
+Use `task_retries` for transient failures such as flaky APIs, temporary files, or services that may need a second attempt.
+
+```python
+import concurra
+
+attempts = {"upload": 0}
+
+def upload_report():
+    attempts["upload"] += 1
+    if attempts["upload"] < 3:
+        raise ConnectionError("temporary upload failure")
+    return "uploaded"
+
+runner = concurra.TaskRunner(task_retries=2)
+runner.add_task(upload_report, label="upload_report")
+
+results = runner.run()
+
+print(results["upload_report"]["status"])        # "Successful"
+print(results["upload_report"]["attempts"])      # 3
+print(results["upload_report"]["retried"])       # True
+print(results["upload_report"]["retry_errors"])  # previous failed attempts
+```
+
+You can override retries for a single task:
+
+```python
+runner.add_task(call_partner_api, label="partner_api", task_retries=4)
+```
+
+---
+
+# 🧰 Example: External Commands
+
+Use `add_command` for direct exec-form commands. This is the safest default and passes arguments exactly as provided.
+
+```python
+import sys
+import concurra
+
+runner = concurra.TaskRunner(max_concurrency=2)
+
+runner.add_command(
+    [sys.executable, "-c", "print('generate report')"],
+    label="generate_report",
+)
+runner.add_command(
+    [sys.executable, "-c", "print('send report')"],
+    label="send_report",
+    depends_on=["generate_report"],
+)
+
+results = runner.run()
+
+print(results["generate_report"]["execution_mode"])        # "subprocess"
+print(results["generate_report"]["result"]["returncode"])  # 0
+print(results["generate_report"]["result"]["stdout"])      # "generate report\n"
+```
+
+Use `add_shell_command` only when you need shell features such as pipes, redirects, globs, or command chaining.
+
+```python
+import concurra
+
+runner = concurra.TaskRunner()
+
+runner.add_shell_command(
+    "printf 'alpha\\nbeta\\n' | grep beta",
+    label="filter_output",
+)
+
+results = runner.run()
+
+print(results["filter_output"]["result"]["stdout"])  # "beta\n"
+```
+
+Command tasks can be mixed with normal Python tasks:
+
+```python
+import sys
+import concurra
+
+def prepare_payload():
+    return "payload ready"
+
+runner = concurra.TaskRunner(max_concurrency=2)
+
+runner.add_task(prepare_payload, label="prepare")
+runner.add_command(
+    [sys.executable, "-c", "print('external command ran')"],
+    label="external_command",
+    depends_on=["prepare"],
+)
+
+results = runner.run()
+
+print(results["prepare"]["result"])                         # "payload ready"
+print(results["external_command"]["execution_mode"])        # "subprocess"
+print(results["external_command"]["result"]["stdout"])      # "external command ran\n"
+```
 
 ---
 

@@ -1,4 +1,5 @@
 import time
+import sys
 import pytest
 import logging
 from concurra.core import TaskRunner
@@ -25,6 +26,9 @@ def dummy_failure(x):
 def echo_kwargs(**kwargs):
     return kwargs
 
+def task_retries_kwarg(task_retries):
+    return task_retries
+
 def test_successful_task_execution():
     runner = TaskRunner(max_concurrency=2, logger=LOGGER)
     runner.add_task(dummy_success, 3, label="task1")
@@ -44,6 +48,249 @@ def test_task_failure_handling():
     assert "fail_task" in results
     assert results["fail_task"]["has_failed"] is True
     assert "Intentional failure" in results["fail_task"]["error"]
+
+def test_task_retries_succeeds_after_transient_failure():
+    attempts = {"count": 0}
+
+    def flaky_task():
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RuntimeError(f"temporary failure {attempts['count']}")
+        return "ok"
+
+    runner = TaskRunner(task_retries=2, progress_stats=False, logger=LOGGER)
+    runner.add_task(flaky_task, label="flaky")
+    results = runner.run()
+
+    assert results["flaky"]["status"] == "Successful"
+    assert results["flaky"]["result"] == "ok"
+    assert results["flaky"]["attempts"] == 3
+    assert results["flaky"]["task_retries"] == 2
+    assert results["flaky"]["retried"] is True
+    assert len(results["flaky"]["retry_errors"]) == 2
+
+def test_task_retries_fails_after_exhausting_attempts():
+    attempts = {"count": 0}
+
+    def always_fails():
+        attempts["count"] += 1
+        raise RuntimeError(f"failure {attempts['count']}")
+
+    runner = TaskRunner(task_retries=2, progress_stats=False, logger=LOGGER)
+    runner.add_task(always_fails, label="always_fails")
+    results = runner.run(verify=False)
+
+    assert results["always_fails"]["status"] == "Failed"
+    assert results["always_fails"]["has_failed"] is True
+    assert results["always_fails"]["attempts"] == 3
+    assert results["always_fails"]["task_retries"] == 2
+    assert results["always_fails"]["retried"] is True
+    assert len(results["always_fails"]["retry_errors"]) == 3
+    assert "failure 3" in results["always_fails"]["error"]
+
+def test_per_task_retries_override_runner_default():
+    attempts = {"count": 0}
+
+    def succeeds_on_second_attempt():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("first attempt failed")
+        return attempts["count"]
+
+    runner = TaskRunner(task_retries=0, progress_stats=False, logger=LOGGER)
+    runner.add_task(succeeds_on_second_attempt, label="override", task_retries=1)
+    results = runner.run()
+
+    assert results["override"]["status"] == "Successful"
+    assert results["override"]["result"] == 2
+    assert results["override"]["attempts"] == 2
+    assert results["override"]["task_retries"] == 1
+
+def test_task_retries_are_not_applied_to_timeouts():
+    runner = TaskRunner(timeout=0.1, task_retries=2, progress_stats=False, logger=LOGGER)
+    runner.add_task(dummy_success, 0.3, label="slow")
+    results = runner.run(verify=False)
+
+    assert results["slow"]["status"] == "Terminated"
+    assert results["slow"]["has_failed"] is True
+    assert results["slow"]["attempts"] == 1
+    assert results["slow"]["task_retries"] == 2
+    assert results["slow"]["retried"] is False
+    assert results["slow"]["retry_errors"] == []
+
+def test_task_retries_must_be_non_negative_integer():
+    with pytest.raises(ValueError):
+        TaskRunner(task_retries=-1)
+
+    with pytest.raises(TypeError):
+        TaskRunner(task_retries=True)
+
+    runner = TaskRunner(progress_stats=False, logger=LOGGER)
+    with pytest.raises(TypeError):
+        runner.add_task(dummy_success, 0, label="bad", task_retries=1.5)
+
+def test_add_function_allows_task_kwarg_named_task_retries():
+    runner = TaskRunner(progress_stats=False, logger=LOGGER)
+    runner.add_function(task_retries_kwarg, kwargs={"task_retries": "payload"}, key="task")
+
+    results = runner.run()
+
+    assert results["task"]["result"] == "payload"
+    assert results["task"]["task_retries"] == 0
+
+def test_add_func_forwards_task_retries_to_task():
+    runner = TaskRunner(progress_stats=False, logger=LOGGER)
+    runner.add_func(task_retries_kwarg, key="task", task_retries="payload")
+
+    results = runner.run()
+
+    assert results["task"]["result"] == "payload"
+    assert results["task"]["task_retries"] == 0
+
+def test_multiprocessing_task_retries_record_attempts():
+    runner = TaskRunner(
+        use_multiprocessing=True,
+        task_retries=1,
+        progress_stats=False,
+        logger=LOGGER
+    )
+    runner.add_task(dummy_failure, 1, label="fail")
+
+    results = runner.run(verify=False)
+
+    assert results["fail"]["status"] == "Failed"
+    assert results["fail"]["attempts"] == 2
+    assert results["fail"]["task_retries"] == 1
+    assert results["fail"]["retried"] is True
+    assert len(results["fail"]["retry_errors"]) == 2
+
+def test_add_command_runs_direct_exec_command():
+    runner = TaskRunner(progress_stats=False, logger=LOGGER)
+    runner.add_command(
+        [sys.executable, "-c", "print('hello from command')"],
+        label="cmd"
+    )
+
+    results = runner.run()
+
+    assert results["cmd"]["status"] == "Successful"
+    assert results["cmd"]["execution_mode"] == "subprocess"
+    assert results["cmd"]["result"]["shell"] is False
+    assert results["cmd"]["result"]["returncode"] == 0
+    assert results["cmd"]["result"]["stdout"].strip() == "hello from command"
+    assert results["cmd"]["result"]["stderr"] == ""
+
+def test_add_shell_command_runs_shell_expression():
+    runner = TaskRunner(progress_stats=False, logger=LOGGER)
+    runner.add_shell_command(
+        "printf 'alpha\\nbeta\\n' | grep beta",
+        label="shell"
+    )
+
+    results = runner.run()
+
+    assert results["shell"]["status"] == "Successful"
+    assert results["shell"]["execution_mode"] == "subprocess"
+    assert results["shell"]["result"]["shell"] is True
+    assert results["shell"]["result"]["returncode"] == 0
+    assert results["shell"]["result"]["stdout"].strip() == "beta"
+
+def test_command_validation_rejects_ambiguous_command_forms():
+    runner = TaskRunner(progress_stats=False, logger=LOGGER)
+
+    with pytest.raises(TypeError):
+        runner.add_command("python tool.py", label="bad_direct")
+
+    with pytest.raises(TypeError):
+        runner.add_command([sys.executable, "-c", 1], label="bad_arg")
+
+    with pytest.raises(ValueError):
+        runner.add_command([], label="empty")
+
+    with pytest.raises(TypeError):
+        runner.add_shell_command([sys.executable, "-c", "print('x')"], label="bad_shell")
+
+    with pytest.raises(ValueError):
+        runner.add_shell_command("   ", label="empty_shell")
+
+def test_command_nonzero_exit_fails_with_structured_result():
+    runner = TaskRunner(progress_stats=False, logger=LOGGER)
+    runner.add_command(
+        [sys.executable, "-c", "import sys; print('bad stdout'); print('bad stderr', file=sys.stderr); sys.exit(7)"],
+        label="bad"
+    )
+
+    results = runner.run(verify=False)
+
+    assert results["bad"]["status"] == "Failed"
+    assert results["bad"]["has_failed"] is True
+    assert "return code 7" in results["bad"]["error"]
+    assert results["bad"]["result"]["returncode"] == 7
+    assert results["bad"]["result"]["stdout"].strip() == "bad stdout"
+    assert results["bad"]["result"]["stderr"].strip() == "bad stderr"
+
+def test_command_check_false_keeps_nonzero_exit_successful():
+    runner = TaskRunner(progress_stats=False, logger=LOGGER)
+    runner.add_command(
+        [sys.executable, "-c", "import sys; sys.exit(5)"],
+        label="nonzero",
+        check=False
+    )
+
+    results = runner.run()
+
+    assert results["nonzero"]["status"] == "Successful"
+    assert results["nonzero"]["has_failed"] is False
+    assert results["nonzero"]["result"]["returncode"] == 5
+
+def test_command_and_python_tasks_can_run_together_with_dependencies():
+    runner = TaskRunner(max_concurrency=2, progress_stats=False, logger=LOGGER)
+    runner.add_task(dummy_success, 0, label="python_first")
+    runner.add_command(
+        [sys.executable, "-c", "print('command after python')"],
+        label="command_after_python",
+        depends_on=["python_first"]
+    )
+
+    results = runner.run()
+
+    assert results["python_first"]["status"] == "Successful"
+    assert results["command_after_python"]["status"] == "Successful"
+    assert results["command_after_python"]["result"]["stdout"].strip() == "command after python"
+
+def test_command_uses_subprocess_mode_inside_multiprocessing_runner():
+    runner = TaskRunner(
+        max_concurrency=2,
+        use_multiprocessing=True,
+        progress_stats=False,
+        logger=LOGGER
+    )
+    runner.add_task(dummy_success, 0, label="python_process")
+    runner.add_command(
+        [sys.executable, "-c", "print('command thread')"],
+        label="command"
+    )
+
+    results = runner.run()
+
+    assert results["python_process"]["status"] == "Successful"
+    assert results["python_process"]["execution_mode"] == "process"
+    assert results["command"]["status"] == "Successful"
+    assert results["command"]["execution_mode"] == "subprocess"
+    assert results["command"]["result"]["stdout"].strip() == "command thread"
+
+def test_command_timeout_terminates_subprocess():
+    runner = TaskRunner(timeout=0.1, progress_stats=False, logger=LOGGER)
+    runner.add_command(
+        [sys.executable, "-c", "import time; time.sleep(5)"],
+        label="slow_command"
+    )
+
+    results = runner.run(verify=False)
+
+    assert results["slow_command"]["status"] == "Terminated"
+    assert results["slow_command"]["has_failed"] is True
+    assert results["slow_command"]["execution_mode"] == "subprocess"
 
 def test_fast_fail_behavior():
     runner = TaskRunner(fast_fail=True, logger=LOGGER)
@@ -503,12 +750,17 @@ def test_result_schema_and_thread_execution_mode():
     expected_keys = {
         "task_name", "start_time", "end_time", "duration", "duration_seconds",
         "result", "error", "trace", "status", "has_failed", "output",
-        "execution_mode", "warning",
+        "execution_mode", "warning", "attempts", "task_retries", "retried",
+        "retry_errors",
     }
     assert set(results["t"].keys()) == expected_keys
     assert results["t"]["execution_mode"] == "thread"
     assert results["t"]["output"] == results["t"]["result"]
     assert results["t"]["warning"] is None
+    assert results["t"]["attempts"] == 1
+    assert results["t"]["task_retries"] == 0
+    assert results["t"]["retried"] is False
+    assert results["t"]["retry_errors"] == []
 
 def test_dependent_skipped_when_dependency_times_out():
     runner = TaskRunner(timeout=0.5, max_concurrency=1, progress_stats=False, logger=LOGGER)
