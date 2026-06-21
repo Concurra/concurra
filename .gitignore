@@ -1,0 +1,15 @@
+.DS_Store
+.idea/
+
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+coverage_html_report/
+
+build/
+dist/
+*.egg-info/
+
+docs/_build/

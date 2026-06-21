@@ -2,7 +2,3 @@ sphinx
 sphinx_rtd_theme
 myst-parser
 tabulate
-concurra
-mkdocs
-mkdocs-material
-mkdocs-awesome-pages-plugin

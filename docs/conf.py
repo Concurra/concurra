@@ -15,7 +15,6 @@ html_theme = 'sphinx_rtd_theme'
 html_theme_options = {
     "navigation_with_keys": True,
     'logo_only': True,
-    'display_version': False
 }
 
 html_context = {
@@ -29,7 +28,7 @@ html_context = {
 
 project = "Concurra"
 author = "Sahil Pardeshi"
-release = "1.0.0"
+release = "1.1.9"
 
 # -- General configuration ---------------------------------------------------
 
@@ -54,6 +53,15 @@ myst_enable_extensions = [
     "colon_fence",
     "tasklist",
     "fieldlist",
+]
+
+# docs/index.md is intentionally synced from README.md so GitHub, PyPI, and
+# ReadTheDocs do not drift. MyST is stricter than GitHub-flavored Markdown about
+# README-style heading jumps and GitHub emoji anchors, so suppress those known
+# compatibility warnings while keeping docs builds warning-clean otherwise.
+suppress_warnings = [
+    "myst.header",
+    "myst.xref_missing",
 ]
 
 # -- Extra metadata for Read the Docs ----------------------------------------

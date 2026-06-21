@@ -51,8 +51,22 @@ Whether you're handling I/O-bound or CPU-bound operations, Concurra helps you ma
 - 🪄 **Background Execution**: Run tasks asynchronously and fetch results later.
 - 🧠 **Multiprocessing Support**: Bypass the GIL for CPU-bound tasks using true parallelism.
 - 🛟 **Pickle-safe Multiprocessing**: Unpicklable tasks fail with a clear message, or optionally fall back to a thread.
+- 🔁 **Task Retries**: Retry transient task exceptions with structured attempt metadata.
+- 🧰 **External Commands**: Run direct exec-form commands or shell command strings alongside Python tasks.
 - 🛑 **Abort Support**: Gracefully abort background task execution.
 - ⏱️ **Per-task Timeouts**: Set a timeout that applies to each task individually.
+
+---
+
+# Contents
+
+- [Installation](#-installation)
+- [Quick Start](#-quick-start)
+- [Core Concepts](#-core-concepts)
+- [API Reference](#-api-reference)
+- [Result Structure](#-result-structure)
+- [Examples](#-example-all-tasks-pass)
+- [License](#-license)
 
 ---
 
