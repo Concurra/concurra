@@ -198,7 +198,7 @@ Concurra can run external commands in the same scheduler as Python functions.
 Use `add_command` for direct exec-form commands. This is the recommended default and mirrors Docker/Kubernetes-style argument lists:
 
 ```python
-runner.add_command(["python", "some_tool.py", "--x", "1"], label="tool")
+runner.add_command(["echo", "generate report"], label="generate_report")
 ```
 
 Use `add_shell_command` only when you intentionally need shell syntax such as pipes, redirects, globbing, or command chaining:
@@ -306,7 +306,7 @@ runner.add_work([
 Queue an external command using direct exec form. `command` must be a list or tuple of strings.
 
 ```python
-runner.add_command(["python", "script.py", "--name", "Mrunal"], label="script")
+runner.add_command(["echo", "generate report"], label="generate_report")
 ```
 
 | Parameter | Type | Description |
@@ -326,7 +326,7 @@ runner.add_command(["python", "script.py", "--name", "Mrunal"], label="script")
 Queue an external command string that is interpreted by the system shell.
 
 ```python
-runner.add_shell_command("python script.py | grep ok", label="filtered")
+runner.add_shell_command("cat logs/*.txt | grep ERROR", label="find_errors")
 ```
 
 | Parameter | Type | Description |
@@ -345,10 +345,10 @@ Command task results are structured:
 
 ```python
 {
-    "command": ["python", "script.py"],
+    "command": ["echo", "generate report"],
     "shell": False,
     "returncode": 0,
-    "stdout": "...",
+    "stdout": "generate report\n",
     "stderr": "",
     "cwd": None,
 }
@@ -605,17 +605,16 @@ runner.add_task(call_partner_api, label="partner_api", task_retries=4)
 Use `add_command` for direct exec-form commands. This is the safest default and passes arguments exactly as provided.
 
 ```python
-import sys
 import concurra
 
 runner = concurra.TaskRunner(max_concurrency=2)
 
 runner.add_command(
-    [sys.executable, "-c", "print('generate report')"],
+    ["echo", "generate report"],
     label="generate_report",
 )
 runner.add_command(
-    [sys.executable, "-c", "print('send report')"],
+    ["echo", "send report"],
     label="send_report",
     depends_on=["generate_report"],
 )
@@ -647,7 +646,6 @@ print(results["filter_output"]["result"]["stdout"])  # "beta\n"
 Command tasks can be mixed with normal Python tasks:
 
 ```python
-import sys
 import concurra
 
 def prepare_payload():
@@ -657,7 +655,7 @@ runner = concurra.TaskRunner(max_concurrency=2)
 
 runner.add_task(prepare_payload, label="prepare")
 runner.add_command(
-    [sys.executable, "-c", "print('external command ran')"],
+    ["echo", "external command ran"],
     label="external_command",
     depends_on=["prepare"],
 )
