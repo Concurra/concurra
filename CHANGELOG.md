@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.10 - 2026-06-21
+
+### Changed
+- Synced ReadTheDocs content with the current README so published docs match GitHub and PyPI.
+- Expanded CI to run the full test suite across Python 3.9 through 3.13.
+- Added package build, Twine metadata check, and Sphinx docs build checks to CI.
+- Added repository ignore rules for local build, cache, and IDE artifacts.
+- Updated README navigation and feature list for retries and command tasks.
+
 ## 1.1.9 - 2026-06-21
 
 ### Added
