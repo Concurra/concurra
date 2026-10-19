@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.12 - 2026-10-19
+
+### Added
+- Added inline type hints across the public API and internals, plus a PEP 561 `py.typed` marker so downstream type checkers pick up the annotations.
+- Exported `CommandExecutionError` and `__version__` from the top-level `concurra` package.
+
+### Changed
+- Included `py.typed` in the packaged distribution and declared the `Typing :: Typed` classifier.
+
+> No runtime behavior changes; all existing APIs and semantics are unchanged.
+
 ## 1.1.11 - 2026-10-19
 
 ### Fixed

@@ -11,9 +11,26 @@ import sys
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from multiprocessing.reduction import ForkingPickler
+from typing import (
+    Any,
+    Callable,
+    Collection,
+    Dict,
+    List,
+    Mapping as MappingType,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 from tabulate import tabulate
 
 LOGGER = logging.getLogger(__name__)
+
+# Type aliases (annotations only; no runtime effect).
+ResultsRegistry = MutableMapping[Any, Dict[str, Any]]
+CommandType = Union[str, Sequence[str]]
 
 
 class CommandExecutionError(RuntimeError):
@@ -21,7 +38,7 @@ class CommandExecutionError(RuntimeError):
     Error raised when an external command exits unsuccessfully.
     """
 
-    def __init__(self, result):
+    def __init__(self, result: Dict[str, Any]) -> None:
         self.result = result
         stderr = result.get("stderr") or ""
         stdout = result.get("stdout") or ""
@@ -40,8 +57,9 @@ class TaskExecutor:
     class for executing tasks while recording runtime results and statistics.
     """
 
-    def __init__(self, task_handler, task_id, label, results_registry, use_multiprocessing=False,
-                 depends_on=None, task_retries=0):
+    def __init__(self, task_handler: Any, task_id: int, label: Any,
+                 results_registry: ResultsRegistry, use_multiprocessing: bool = False,
+                 depends_on: Optional[Collection[Any]] = None, task_retries: int = 0) -> None:
         """
         Initialize the executor.
 
@@ -74,10 +92,10 @@ class TaskExecutor:
         self._init_results_registry()
         self.depends_on = set(depends_on or [])
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"<TaskExecutor {self.label}[#{self.task_id}] {self.task_handler}>"
 
-    def run(self):
+    def run(self) -> None:
         """
         Execute the task and record results and errors, if any.
         """
@@ -116,14 +134,14 @@ class TaskExecutor:
                 None, True, f"{type(exc).__name__}: Could not record task result: {exc}",
                 traceback.format_exc())
 
-    def join(self):
+    def join(self) -> None:
         """
         Block until the executor (e.g., thread or process) completes.
         """
         if self.executor:
             self.executor.join()
 
-    def update_results_on_termination(self, error=None):
+    def update_results_on_termination(self, error: Optional[BaseException] = None) -> None:
         """
         Force-update the results registry in case the task is externally terminated.
 
@@ -136,7 +154,8 @@ class TaskExecutor:
         error_details = f"{type(error).__name__}: {str(error)}"
         self._record_results(None, True, error_details, None, status="Terminated")
 
-    def update_results_on_failure(self, error, warning=None, execution_mode=None):
+    def update_results_on_failure(self, error: BaseException, warning: Optional[str] = None,
+                                  execution_mode: Optional[str] = None) -> None:
         """
         Force-update the results registry for a task that failed before it could run.
         """
@@ -149,7 +168,7 @@ class TaskExecutor:
         trace_log = ''.join(traceback.format_exception(type(error), error, error.__traceback__))
         self._record_results(None, True, error_details, trace_log, status="Failed")
 
-    def use_thread_fallback(self, warning):
+    def use_thread_fallback(self, warning: str) -> None:
         """
         Run this task in a thread even though the runner normally uses processes.
         """
@@ -158,7 +177,7 @@ class TaskExecutor:
         self.execution_mode = "thread_fallback"
         self.warning = warning
 
-    def is_results_updated(self):
+    def is_results_updated(self) -> bool:
         """
         Check if the results registry has been updated for this task.
 
@@ -167,7 +186,7 @@ class TaskExecutor:
         """
         return bool(self.results_registry.get(self.label))
 
-    def start(self):
+    def start(self) -> None:
         if self.is_running():
             raise RuntimeError("Already running")
         
@@ -185,7 +204,7 @@ class TaskExecutor:
         self._has_started = True
         self.executor.start()
 
-    def terminate(self):
+    def terminate(self) -> None:
         self._externally_terminated = True
         if hasattr(self.task_handler, "terminate"):
             self.task_handler.terminate()
@@ -193,11 +212,11 @@ class TaskExecutor:
             if self.use_multiprocessing:
                 self.executor.terminate()  # For processes
 
-    def is_running(self):
+    def is_running(self) -> bool:
         return self.executor is not None and self.executor.is_alive()
 
     @property
-    def exitcode(self):
+    def exitcode(self) -> Optional[int]:
         """
         Return an exit code if task has finished; else None.
 
@@ -211,7 +230,7 @@ class TaskExecutor:
         return 0
 
     @property
-    def has_failed(self):
+    def has_failed(self) -> bool:
         """
         Indicates whether the task execution failed due to an exception.
 
@@ -220,19 +239,20 @@ class TaskExecutor:
         """
         return self.results_registry[self.label].get("has_failed", False)
 
-    def _init_results_registry(self):
+    def _init_results_registry(self) -> None:
         """
         Initialize the results entry in the results registry for this task.
         """
         self.results_registry[self.label] = {}
 
-    def _record_results(self, result, has_failed, err_message, trace_log, status=None):
+    def _record_results(self, result: Any, has_failed: bool, err_message: Optional[str],
+                        trace_log: Optional[str], status: Optional[str] = None) -> None:
         if self._results_lock:
             with self._results_lock:
                 return self._record_results_unlocked(result, has_failed, err_message, trace_log, status)
         return self._record_results_unlocked(result, has_failed, err_message, trace_log, status)
 
-    def _is_already_terminated(self):
+    def _is_already_terminated(self) -> bool:
         """
         Whether this task has already been marked "Terminated".
 
@@ -247,7 +267,8 @@ class TaskExecutor:
             return bool(existing) and existing.get("status") == "Terminated"
         return False
 
-    def _record_results_unlocked(self, result, has_failed, err_message, trace_log, status=None):
+    def _record_results_unlocked(self, result: Any, has_failed: bool, err_message: Optional[str],
+                                 trace_log: Optional[str], status: Optional[str] = None) -> None:
         """
         Store execution results, stats, and metadata in the results registry.
 
@@ -312,7 +333,7 @@ class TaskHandler:
         name (str): The name of the task (function name or string representation).
     """
 
-    def __init__(self, task, *args, **kwargs):
+    def __init__(self, task: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         """
         Initialize the TaskHandler with the given task and arguments.
 
@@ -326,7 +347,7 @@ class TaskHandler:
         self.kwargs = kwargs
         self.name = getattr(task, '__name__', str(task))
 
-    def run(self):
+    def run(self) -> Any:
         """
         Execute the task with the provided arguments.
 
@@ -335,7 +356,7 @@ class TaskHandler:
         """
         return self.task(*self.args, **self.kwargs)
     
-    def __str__(self):
+    def __str__(self) -> str:
         """
         Return a string representation of the TaskHandler instance.
 
@@ -350,8 +371,10 @@ class CommandTaskHandler:
     A task handler for external commands.
     """
 
-    def __init__(self, command, shell=False, cwd=None, env=None, check=True,
-                 capture_output=True, text=True):
+    def __init__(self, command: CommandType, shell: bool = False,
+                 cwd: Optional[Union[str, "os.PathLike"]] = None,
+                 env: Optional[MappingType[str, str]] = None, check: bool = True,
+                 capture_output: bool = True, text: bool = True) -> None:
         self.command = self._validate_command(command, shell)
         self.shell = shell
         self.cwd = cwd
@@ -365,7 +388,7 @@ class CommandTaskHandler:
         self._terminated = False
 
     @staticmethod
-    def _validate_command(command, shell):
+    def _validate_command(command: CommandType, shell: bool) -> Union[str, List[str]]:
         if shell:
             if not isinstance(command, str):
                 raise TypeError("add_shell_command requires command to be a string.")
@@ -383,7 +406,7 @@ class CommandTaskHandler:
             raise TypeError("add_command requires every command element to be a string.")
         return list(command)
 
-    def run(self):
+    def run(self) -> Dict[str, Any]:
         stdout_target = subprocess.PIPE if self.capture_output else None
         stderr_target = subprocess.PIPE if self.capture_output else None
 
@@ -418,7 +441,7 @@ class CommandTaskHandler:
             raise CommandExecutionError(result)
         return result
 
-    def terminate(self):
+    def terminate(self) -> None:
         with self._process_lock:
             self._terminated = True
             process = self._process
@@ -450,7 +473,7 @@ class CommandTaskHandler:
             process.wait(timeout=0.1)
 
     @staticmethod
-    def _signal_process_group(process, signum):
+    def _signal_process_group(process: "subprocess.Popen", signum: int) -> None:
         try:
             os.killpg(process.pid, signum)
         except ProcessLookupError:
@@ -469,7 +492,7 @@ class CommandTaskHandler:
                 if int(group) == process.pid and not state.startswith("Z"):
                     raise
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"<CommandTaskHandler: {self.command}>"
 
 
@@ -482,9 +505,11 @@ class TaskRunner:
     PROGRESS_LOG_DIVISOR = 10   # log progress every (total_tasks / this)
     SHUTDOWN_GRACE = 0.1        # seconds to wait when reaping/terminating tasks
 
-    def __init__(self, max_concurrency=None, name=None, timeout=None, progress_stats=True, fast_fail=False, 
-                 use_multiprocessing=False, logger=None, log_errors=False,
-                 fallback_to_thread_on_pickle_error=False, task_retries=0):
+    def __init__(self, max_concurrency: Optional[int] = None, name: Optional[str] = None,
+                 timeout: Optional[float] = None, progress_stats: bool = True, fast_fail: bool = False,
+                 use_multiprocessing: bool = False, logger: Optional[logging.Logger] = None,
+                 log_errors: bool = False, fallback_to_thread_on_pickle_error: bool = False,
+                 task_retries: int = 0) -> None:
         """
         Initialize the TaskRunner.
 
@@ -543,10 +568,12 @@ class TaskRunner:
         self._terminated_tasks = set()
         self._successful_tasks = set()
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._total_tasks
 
-    def add_task(self, task, *args, label=None, depends_on=None, task_retries=None, **kwargs):
+    def add_task(self, task: Callable[..., Any], *args: Any, label: Optional[Any] = None,
+                 depends_on: Optional[Collection[Any]] = None,
+                 task_retries: Optional[int] = None, **kwargs: Any) -> None:
         """
         Add a task to the task queue to be executed.
 
@@ -561,7 +588,9 @@ class TaskRunner:
         self._add_task(task, args, kwargs, label=label, depends_on=depends_on,
                        task_retries=task_retries)
 
-    def _add_task(self, task, args, kwargs, label=None, depends_on=None, task_retries=None):
+    def _add_task(self, task: Callable[..., Any], args: Sequence[Any], kwargs: MappingType[str, Any],
+                  label: Optional[Any] = None, depends_on: Optional[Collection[Any]] = None,
+                  task_retries: Optional[int] = None) -> None:
         """
         Internal task registration that takes the task's ``args``/``kwargs`` as
         explicit containers rather than via ``*args``/``**kwargs``. This keeps
@@ -575,8 +604,11 @@ class TaskRunner:
         self._register_task_handler(task_handler, label=label, depends_on=depends_on,
                                     task_retries=task_retries)
 
-    def _register_task_handler(self, task_handler, label=None, depends_on=None, task_retries=None,
-                               use_multiprocessing=None, execution_mode=None):
+    def _register_task_handler(self, task_handler: Any, label: Optional[Any] = None,
+                               depends_on: Optional[Collection[Any]] = None,
+                               task_retries: Optional[int] = None,
+                               use_multiprocessing: Optional[bool] = None,
+                               execution_mode: Optional[str] = None) -> None:
         if self._has_started:
             raise RuntimeError("Cannot add tasks after execution has started.")
 
@@ -611,8 +643,12 @@ class TaskRunner:
         self.parents_of_label[label] = depends_on
         self._total_tasks += 1
 
-    def add_command(self, command, label=None, depends_on=None, cwd=None, env=None, check=True,
-                    capture_output=True, text=True, task_retries=None):
+    def add_command(self, command: CommandType, label: Optional[Any] = None,
+                    depends_on: Optional[Collection[Any]] = None,
+                    cwd: Optional[Union[str, "os.PathLike"]] = None,
+                    env: Optional[MappingType[str, str]] = None, check: bool = True,
+                    capture_output: bool = True, text: bool = True,
+                    task_retries: Optional[int] = None) -> None:
         """
         Add an external command using direct exec form.
 
@@ -633,8 +669,12 @@ class TaskRunner:
                                     task_retries=task_retries, use_multiprocessing=False,
                                     execution_mode="subprocess")
 
-    def add_shell_command(self, command, label=None, depends_on=None, cwd=None, env=None,
-                          check=True, capture_output=True, text=True, task_retries=None):
+    def add_shell_command(self, command: str, label: Optional[Any] = None,
+                          depends_on: Optional[Collection[Any]] = None,
+                          cwd: Optional[Union[str, "os.PathLike"]] = None,
+                          env: Optional[MappingType[str, str]] = None, check: bool = True,
+                          capture_output: bool = True, text: bool = True,
+                          task_retries: Optional[int] = None) -> None:
         """
         Add an external command string that is interpreted by the system shell.
 
@@ -655,7 +695,7 @@ class TaskRunner:
                                     task_retries=task_retries, use_multiprocessing=False,
                                     execution_mode="subprocess")
 
-    def add_func(self, func, *args, **kwargs):
+    def add_func(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         """
         Add a task, using the reserved ``key`` keyword as its unique label.
 
@@ -673,7 +713,7 @@ class TaskRunner:
         key = kwargs.pop("key", None)
         self._add_task(func, args, kwargs, label=key)
 
-    def add_work(self, workload):
+    def add_work(self, workload: Sequence[Tuple[Any, ...]]) -> None:
         """
         Adds multiple tasks to the runner from a list of tuples.
 
@@ -714,8 +754,10 @@ class TaskRunner:
 
             self._add_task(func, args, kwargs, label=label)
 
-    def add_function(self, func, args=None, kwargs=None, key=None, log_exception=True, depends_on=None,
-                     task_retries=None):
+    def add_function(self, func: Callable[..., Any], args: Optional[Sequence[Any]] = None,
+                     kwargs: Optional[MappingType[str, Any]] = None, key: Optional[Any] = None,
+                     log_exception: bool = True, depends_on: Optional[Collection[Any]] = None,
+                     task_retries: Optional[int] = None) -> None:
         """
         Adds a single function to the task runner.
 
@@ -735,14 +777,14 @@ class TaskRunner:
                        task_retries=task_retries)
 
     @staticmethod
-    def _validate_task_retries(task_retries):
+    def _validate_task_retries(task_retries: int) -> int:
         if isinstance(task_retries, bool) or not isinstance(task_retries, int):
             raise TypeError("task_retries must be a non-negative integer.")
         if task_retries < 0:
             raise ValueError("task_retries must be a non-negative integer.")
         return task_retries
 
-    def execute_in_background(self):
+    def execute_in_background(self) -> None:
         """
         Start the task execution in the background on a separate thread.
 
@@ -762,7 +804,8 @@ class TaskRunner:
         self._task_handler._state = self.STATE_TERMINATED if self._terminating else self.STATE_RUNNING
         self._task_handler.start()
 
-    def get_background_results(self, verify=True, raise_exception=False, error_message=None):
+    def get_background_results(self, verify: bool = True, raise_exception: bool = False,
+                               error_message: Optional[str] = None) -> Dict[Any, Dict[str, Any]]:
         """
         Retrieve the results of the tasks after execution completes.
 
@@ -783,7 +826,8 @@ class TaskRunner:
             self.verify(raise_exception, error_message)
         return output
 
-    def run(self, verify=True, raise_exception=False, error_message=None):
+    def run(self, verify: bool = True, raise_exception: bool = False,
+            error_message: Optional[str] = None) -> Dict[Any, Dict[str, Any]]:
         """
         Execute the tasks and wait for results.
 
@@ -801,10 +845,11 @@ class TaskRunner:
         self.execute_in_background()
         return self.get_background_results(verify, raise_exception, error_message)
 
-    def execute(self, verify=True, raise_exception=False, error_message=None):
+    def execute(self, verify: bool = True, raise_exception: bool = False,
+                error_message: Optional[str] = None) -> Dict[Any, Dict[str, Any]]:
         return self.run(verify=verify, raise_exception=raise_exception, error_message=error_message)
 
-    def show_progress(self):
+    def show_progress(self) -> None:
         """
         Display the progress of task execution in a human-readable format.
         
@@ -819,7 +864,7 @@ class TaskRunner:
         progress = f"{status} {self._executed_tasks}/{self._total_tasks} [{progress}%]"
         self.log.info(f"{self.name} progress: {progress} in {time_display}")
 
-    def is_running(self):
+    def is_running(self) -> bool:
         """
         Check if the task execution is still in progress.
 
@@ -828,7 +873,7 @@ class TaskRunner:
         """
         return bool(self._task_handler and self._task_handler._state == self.STATE_RUNNING)
     
-    def abort(self):
+    def abort(self) -> Dict[Any, Dict[str, Any]]:
         """
         Abort the execution of tasks and terminate all running tasks.
 
@@ -840,7 +885,7 @@ class TaskRunner:
         self.verify()
         return dict(self.results_registry)
 
-    def verify(self, raise_exception=False, error_message=None):
+    def verify(self, raise_exception: bool = False, error_message: Optional[str] = None) -> None:
         """
         Verify that all tasks have completed successfully.
 
@@ -871,7 +916,7 @@ class TaskRunner:
         else:
             self.log.info(f"\n{report}")
 
-    def _cleanup_finished_tasks(self):
+    def _cleanup_finished_tasks(self) -> bool:
         """
         Clean up completed tasks from the active list and invoke callback for each.
 
@@ -932,7 +977,7 @@ class TaskRunner:
 
         return cleanup_done
 
-    def _log_progress_if_due(self):
+    def _log_progress_if_due(self) -> None:
         """Emit a progress line at most once per PROGRESS_LOG_DIVISOR chunk."""
         if not self.progress_stats or not self._total_tasks:
             return
@@ -940,7 +985,7 @@ class TaskRunner:
         if self._executed_tasks % step == 0:
             self.show_progress()
 
-    def _start_new_tasks(self):
+    def _start_new_tasks(self) -> None:
         """
         Start new tasks if there is available capacity for additional workers.
         """
@@ -973,7 +1018,7 @@ class TaskRunner:
                     continue
                 self.started_tasks.append(task)
 
-    def _prepare_task_for_execution(self, task):
+    def _prepare_task_for_execution(self, task: "TaskExecutor") -> bool:
         if not task.use_multiprocessing:
             return True
 
@@ -995,7 +1040,7 @@ class TaskRunner:
         return False
 
     @staticmethod
-    def _get_pickling_error(task):
+    def _get_pickling_error(task: "TaskExecutor") -> Optional[BaseException]:
         try:
             ForkingPickler.dumps((
                 task.label,
@@ -1007,13 +1052,13 @@ class TaskRunner:
             return exc
         return None
 
-    def _record_start_failure(self, task, error):
+    def _record_start_failure(self, task: "TaskExecutor", error: BaseException) -> None:
         task.update_results_on_failure(error)
         self._executed_tasks += 1
         self._failed_tasks.add(task.label)
         self._log_progress_if_due()
  
-    def _handle_tasks(self):
+    def _handle_tasks(self) -> None:
         """
         Manage and maintain the task execution process in the background.
 
@@ -1041,7 +1086,7 @@ class TaskRunner:
                     self.log.info(f"Deleting terminated task: {task.label}, {task.task_name}")
                     del self.started_tasks[i]
 
-    def _terminate_tasks(self):
+    def _terminate_tasks(self) -> None:
         """
         Terminate all tasks that are still running.
 
@@ -1061,12 +1106,12 @@ class TaskRunner:
                 if task.exitcode is None:
                     task.terminate()
 
-    def _has_task_timed_out(self, task):
+    def _has_task_timed_out(self, task: "TaskExecutor") -> bool:
         if self.timeout is None or not task.is_running() or not task.time_started:
             return False
         return (datetime.now() - task.time_started).total_seconds() >= self.timeout
 
-    def get_active_runner_count(self):
+    def get_active_runner_count(self) -> int:
         """
         Returns the number of currently running task executors.
 
@@ -1075,7 +1120,7 @@ class TaskRunner:
         """
         return sum(1 for task in self.started_tasks if task.is_running())
 
-    def get_next_runnable_task(self):
+    def get_next_runnable_task(self) -> Optional["TaskExecutor"]:
         i = 0
         while i < len(self.tasks):
             task = self.tasks[i]
@@ -1099,7 +1144,7 @@ class TaskRunner:
             i += 1
         return None
 
-    def _validate_dependency_labels(self):
+    def _validate_dependency_labels(self) -> None:
         known_labels = set(self.parents_of_label)
         missing_dependencies = {
             label: dependencies - known_labels
@@ -1113,7 +1158,8 @@ class TaskRunner:
             )
             raise ValueError(f"Unknown task dependency label(s): {details}.")
 
-    def _find_cycle_from_new_task(self, label, depends_on):
+    def _find_cycle_from_new_task(self, label: Any,
+                                  depends_on: Collection[Any]) -> Optional[List[Any]]:
         path = [label]
         visited = set()
         stack = [iter(depends_on)]
