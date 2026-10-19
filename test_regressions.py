@@ -191,8 +191,14 @@ while not release.exists() and time.monotonic() < deadline:
 if release.exists():
     completed.touch()
 """.format(paths=[str(ready), str(release), str(completed)])
-    parent_code = "import subprocess, sys; subprocess.Popen([sys.executable, '-c', {!r}]).wait()".format(child_code)
-    command = [sys.executable, "-c", parent_code]
+    # Use script paths so cmd.exe does not reinterpret quotes embedded in
+    # nested Python -c strings before the cancellation test can even start.
+    child_script = tmp_path / "child.py"
+    child_script.write_text(child_code)
+    parent_script = tmp_path / "parent.py"
+    parent_script.write_text(
+        "import subprocess, sys; subprocess.Popen([sys.executable, {!r}]).wait()".format(str(child_script)))
+    command = [sys.executable, str(parent_script)]
     runner = TaskRunner(progress_stats=False)
     if shell:
         command_string = (subprocess.list2cmdline(command) if os.name == "nt"
@@ -227,6 +233,35 @@ def test_terminated_command_handler_cannot_start_later(tmp_path):
     with pytest.raises(RuntimeError, match="terminated"):
         handler.run()
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("members", ["", "123 Z\n", "456 S\n123 Z+\n"])
+def test_macos_exited_group_permission_error_is_harmless(monkeypatch, members):
+    from types import SimpleNamespace
+
+    def denied(*args):
+        raise PermissionError("group already exited")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(os, "killpg", denied, raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=members))
+    process = SimpleNamespace(pid=123, poll=lambda: 0)
+    CommandTaskHandler._signal_process_group(process, 15)
+
+
+@pytest.mark.parametrize("returncode,members", [(None, ""), (0, "123 S\n")])
+def test_macos_live_group_permission_error_is_not_hidden(monkeypatch, returncode, members):
+    from types import SimpleNamespace
+
+    def denied(*args):
+        raise PermissionError("live group denied")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(os, "killpg", denied, raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=members))
+    process = SimpleNamespace(pid=123, poll=lambda: returncode)
+    with pytest.raises(PermissionError, match="live group denied"):
+        CommandTaskHandler._signal_process_group(process, 15)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process group semantics")

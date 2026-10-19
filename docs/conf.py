@@ -28,7 +28,7 @@ html_context = {
 
 project = "Concurra"
 author = "Sahil Pardeshi"
-release = "1.1.9"
+release = "1.1.11"
 
 # -- General configuration ---------------------------------------------------
 

@@ -7,6 +7,7 @@ import logging
 import subprocess
 import signal
 import operator
+import sys
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from multiprocessing.reduction import ForkingPickler
@@ -428,19 +429,13 @@ class CommandTaskHandler:
         if os.name == "posix":
             # The shell may have exited while its children still hold stdout
             # open. Signal its group even when the immediate child is dead.
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                return
+            self._signal_process_group(process, signal.SIGTERM)
             try:
                 process.wait(timeout=0.1)
             except subprocess.TimeoutExpired:
                 pass
             # Reap descendants that ignore SIGTERM as well as their parent.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            self._signal_process_group(process, signal.SIGKILL)
         elif os.name == "nt" and process.poll() is None:
             subprocess.run(
                 ["taskkill", "/PID", str(process.pid), "/T", "/F"],
@@ -453,6 +448,26 @@ class CommandTaskHandler:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=0.1)
+
+    @staticmethod
+    def _signal_process_group(process, signum):
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            # macOS can return EPERM for a group containing only zombies.
+            # Confirm that no live members remain; do not suppress a real
+            # permission failure while the command or its children are alive.
+            if sys.platform != "darwin" or process.poll() is None:
+                raise
+            snapshot = subprocess.run(
+                ["/bin/ps", "-axo", "pgid=,stat="], stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, universal_newlines=True, check=True)
+            for line in snapshot.stdout.splitlines():
+                group, state = line.split()
+                if int(group) == process.pid and not state.startswith("Z"):
+                    raise
 
     def __str__(self):
         return f"<CommandTaskHandler: {self.command}>"
