@@ -5,6 +5,8 @@ import threading
 import multiprocessing
 import logging
 import subprocess
+import signal
+import operator
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from multiprocessing.reduction import ForkingPickler
@@ -82,6 +84,8 @@ class TaskExecutor:
         self.time_started = datetime.now()
 
         for attempt in range(1, self.task_retries + 2):
+            if self._is_already_terminated():
+                return
             self.attempts = attempt
             try:
                 result = self.task_handler.run()
@@ -89,18 +93,27 @@ class TaskExecutor:
                 err_message = None
                 trace_log = None
                 break
-            except Exception as e:
+            except BaseException as e:
                 has_failed = True
-                error_result = getattr(e, "result", None)
-                if error_result is not None:
-                    result = error_result
+                result = getattr(e, "result", None)
                 trace_log = traceback.format_exc()
                 err_message = f"{type(e).__name__}: {str(e)}"
                 self.retry_errors.append(err_message)
-                if attempt > self.task_retries:
+                # SystemExit/KeyboardInterrupt are worker failures, not
+                # transient exceptions that should be retried.
+                if not isinstance(e, Exception) or attempt > self.task_retries:
                     break
 
-        self._record_results(result, has_failed, err_message, trace_log)
+        try:
+            self._record_results(result, has_failed, err_message, trace_log)
+        except Exception as exc:
+            if not self.use_multiprocessing:
+                raise
+            # A valid callable can still return an unpicklable value. Publish
+            # a plain failure record instead of losing the worker's result.
+            self._record_results(
+                None, True, f"{type(exc).__name__}: Could not record task result: {exc}",
+                traceback.format_exc())
 
     def join(self):
         """
@@ -172,6 +185,7 @@ class TaskExecutor:
         self.executor.start()
 
     def terminate(self):
+        self._externally_terminated = True
         if hasattr(self.task_handler, "terminate"):
             self.task_handler.terminate()
         if self.executor is not None:
@@ -189,7 +203,11 @@ class TaskExecutor:
         Returns:
             int or None
         """
-        return 0 if self._has_started and not self.is_running() else None
+        if not self._has_started or self.is_running():
+            return None
+        if self.use_multiprocessing:
+            return self.executor.exitcode
+        return 0
 
     @property
     def has_failed(self):
@@ -343,6 +361,7 @@ class CommandTaskHandler:
         self.name = "shell_command" if shell else "command"
         self._process = None
         self._process_lock = threading.Lock()
+        self._terminated = False
 
     @staticmethod
     def _validate_command(command, shell):
@@ -368,6 +387,11 @@ class CommandTaskHandler:
         stderr_target = subprocess.PIPE if self.capture_output else None
 
         with self._process_lock:
+            if self._terminated:
+                raise RuntimeError("Command execution was terminated")
+            process_options = {"start_new_session": True} if os.name == "posix" else {}
+            if os.name == "nt":
+                process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
             self._process = subprocess.Popen(
                 self.command,
                 shell=self.shell,
@@ -375,7 +399,8 @@ class CommandTaskHandler:
                 env=self.env,
                 stdout=stdout_target,
                 stderr=stderr_target,
-                text=self.text,
+                universal_newlines=self.text,
+                **process_options,
             )
 
         stdout, stderr = self._process.communicate()
@@ -394,12 +419,35 @@ class CommandTaskHandler:
 
     def terminate(self):
         with self._process_lock:
+            self._terminated = True
             process = self._process
 
-        if process is None or process.poll() is not None:
+        if process is None:
             return
 
-        process.terminate()
+        if os.name == "posix":
+            # The shell may have exited while its children still hold stdout
+            # open. Signal its group even when the immediate child is dead.
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+            try:
+                process.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                pass
+            # Reap descendants that ignore SIGTERM as well as their parent.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        elif os.name == "nt" and process.poll() is None:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False)
+        elif process.poll() is None:
+            process.terminate()
         try:
             process.wait(timeout=0.1)
         except subprocess.TimeoutExpired:
@@ -439,7 +487,8 @@ class TaskRunner:
         """
 
         self.log = logger or LOGGER
-        self.max_concurrency = max_concurrency or os.cpu_count()
+        self.max_concurrency = operator.index(
+            (os.cpu_count() or 1) if max_concurrency is None else max_concurrency)
         if self.max_concurrency < 1:
             self.log.warning("max_concurrency must be >= 1; resetting to 1, tasks will not run in parallel")
             self.max_concurrency = 1
@@ -695,7 +744,7 @@ class TaskRunner:
         self._start_new_tasks()
         self._task_handler = threading.Thread(target=self._handle_tasks)
         self._task_handler.daemon = True
-        self._task_handler._state = self.STATE_RUNNING
+        self._task_handler._state = self.STATE_TERMINATED if self._terminating else self.STATE_RUNNING
         self._task_handler.start()
 
     def get_background_results(self, verify=True, raise_exception=False, error_message=None):
@@ -710,7 +759,8 @@ class TaskRunner:
         Returns:
             dict: A dictionary of task results.
         """
-        self._task_handler._state = self.STATE_CLOSING
+        if self._task_handler._state != self.STATE_TERMINATED:
+            self._task_handler._state = self.STATE_CLOSING
         self._task_handler.join()
 
         output = dict(self.results_registry)
@@ -819,16 +869,13 @@ class TaskRunner:
             for idx in reversed(range(len(self.started_tasks))):
                 task = self.started_tasks[idx]
                 if self._has_task_timed_out(task):
-                    # Terminate and join first to give the worker a chance to die
-                    # before we record. Result integrity itself is guaranteed by
-                    # the termination guard in TaskExecutor._record_results, which
-                    # stops a lingering worker (thread or process) from overwriting
-                    # the "Terminated" result afterwards.
+                    # Publish cancellation before stopping the worker so a
+                    # terminated command cannot launch another retry.
+                    task.update_results_on_termination(
+                        TimeoutError(f"Task exceeded timeout of {self.timeout} seconds"))
                     task.terminate()
                     if task.executor:
                         task.executor.join(timeout=self.SHUTDOWN_GRACE)
-                    task.update_results_on_termination(
-                        TimeoutError(f"Task exceeded timeout of {self.timeout} seconds"))
                     cleanup_done = True
                     del self.started_tasks[idx]
 
@@ -846,6 +893,9 @@ class TaskRunner:
 
                 elif task.exitcode is not None:
                     task.executor.join(timeout=self.SHUTDOWN_GRACE)
+                    if not task.is_results_updated():
+                        task.update_results_on_failure(RuntimeError(
+                            f"Worker exited with code {task.exitcode} without recording a result"))
                     cleanup_done = True
                     del self.started_tasks[idx]
 
@@ -882,7 +932,7 @@ class TaskRunner:
         with self._state_lock:
             if self._terminating:
                 return
-            for _ in range(self.max_concurrency - len(self.started_tasks)):
+            while len(self.started_tasks) < self.max_concurrency:
                 if not self.tasks:
                     return
                 task = self.get_next_runnable_task()
@@ -958,9 +1008,10 @@ class TaskRunner:
 
         thread = threading.current_thread()
 
-        while thread._state == self.STATE_RUNNING or (self.started_tasks and thread._state != self.STATE_TERMINATED):
-            if self._cleanup_finished_tasks():
-                self._start_new_tasks()
+        while thread._state != self.STATE_TERMINATED and (
+                thread._state == self.STATE_RUNNING or self.started_tasks or self.tasks):
+            self._cleanup_finished_tasks()
+            self._start_new_tasks()
             time.sleep(self.MAINTENANCE_INTERVAL)
 
         if thread._state == self.STATE_TERMINATED and self.started_tasks:
@@ -988,12 +1039,12 @@ class TaskRunner:
                 self._task_handler._state = self.STATE_TERMINATED
 
             for task in self.started_tasks + self.tasks:
-                if task.exitcode is None:
-                    task.terminate()
                 if not task.is_results_updated():
                     task.update_results_on_termination(
                         RuntimeError("Execution terminated before completion"))
                     self._terminated_tasks.add(task.label)
+                if task.exitcode is None:
+                    task.terminate()
 
     def _has_task_timed_out(self, task):
         if self.timeout is None or not task.is_running() or not task.time_started:
@@ -1023,6 +1074,8 @@ class TaskRunner:
                 self._terminated_tasks.add(task.label)
                 self._executed_tasks += 1
                 self.tasks.pop(i)
+                # Earlier forward references can now be skipped too.
+                i = 0
                 continue
 
             if not task.depends_on:
@@ -1048,24 +1101,19 @@ class TaskRunner:
     def _find_cycle_from_new_task(self, label, depends_on):
         path = [label]
         visited = set()
-
-        def visit(dependency):
+        stack = [iter(depends_on)]
+        while stack:
+            try:
+                dependency = next(stack[-1])
+            except StopIteration:
+                stack.pop()
+                path.pop()
+                continue
             if dependency == label:
                 return path + [label]
             if dependency in visited:
-                return None
-
+                continue
             visited.add(dependency)
             path.append(dependency)
-            for parent_dependency in self.parents_of_label.get(dependency, set()):
-                cycle = visit(parent_dependency)
-                if cycle:
-                    return cycle
-            path.pop()
-            return None
-
-        for dependency in depends_on:
-            cycle = visit(dependency)
-            if cycle:
-                return cycle
+            stack.append(iter(self.parents_of_label.get(dependency, ())))
         return None

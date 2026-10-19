@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Report abnormal worker exits and unpicklable process results as failures, and block dependent tasks.
+- Finish scheduling after worker startup failures and fully propagate failed forward dependencies.
+- Prevent retries after timeout, abort, or fast-fail cancellation.
+- Terminate command process groups on POSIX and command trees on Windows.
+- Coerce zero concurrency to one and handle an unavailable CPU count.
+- Validate long dependency chains without hitting Python's recursion limit.
+- Clear stale output from earlier failed retry attempts.
+
+### Tests
+- Assert structured pickling failures instead of CPython-version-specific exception wording, fixing Python 3.12/3.13 test failures.
+- Added regression coverage for cancellation, abnormal exits, dependency scheduling, command retries, and long graphs.
+- Added macOS and Windows regression jobs alongside the existing Linux Python-version matrix.
+
 ## 1.1.10 - 2026-06-21
 
 ### Changed

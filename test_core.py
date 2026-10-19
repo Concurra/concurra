@@ -350,7 +350,12 @@ def test_unpicklable_multiprocessing_task_fails_without_blocking_other_tasks():
 
     assert results["unpicklable"]["status"] == "Failed"
     assert results["unpicklable"]["has_failed"] is True
-    assert "pickle" in results["unpicklable"]["error"].lower()
+    # CPython versions use different wording for an unpicklable local
+    # callable (e.g. "Can't pickle" versus "Can't get local object").
+    # Check the failure record and Concurra's stable diagnostic below.
+    assert results["unpicklable"]["error"]
+    assert results["unpicklable"]["trace"]
+    assert results["unpicklable"]["attempts"] == 0
     assert results["unpicklable"]["execution_mode"] is None
     assert results["unpicklable"]["warning"] == "Task was not picklable and thread fallback is disabled"
     assert results["picklable"]["status"] == "Successful"
